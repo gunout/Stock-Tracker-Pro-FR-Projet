@@ -1,7 +1,0 @@
-streamlit
-requests
-pandas
-python-dotenv
-plotly
-numpy
-
