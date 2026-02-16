@@ -1,10 +1,11 @@
-# app.py - Version avec graphiques fixes
+# app.py - Version avec communication JavaScript
 import streamlit as st
 from datetime import datetime
 import pandas as pd
 import numpy as np
 import json
 import time
+import random
 
 # Configuration de la page
 st.set_page_config(
@@ -14,7 +15,7 @@ st.set_page_config(
 )
 
 def create_dashboard_html(data):
-    """Crée le HTML du dashboard avec graphiques fixes"""
+    """Crée le HTML du dashboard avec communication JavaScript"""
     
     html = f"""
     <!DOCTYPE html>
@@ -51,6 +52,10 @@ def create_dashboard_html(data):
                 font-weight: bold;
                 color: #333;
                 margin-bottom: 10px;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                flex-wrap: wrap;
             }}
             .symbol-title span {{
                 color: #667eea;
@@ -58,6 +63,24 @@ def create_dashboard_html(data):
             .last-update {{
                 color: #666;
                 font-size: 14px;
+            }}
+            .connection-status {{
+                display: inline-flex;
+                align-items: center;
+                gap: 5px;
+                padding: 5px 10px;
+                border-radius: 20px;
+                font-size: 12px;
+                font-weight: bold;
+                margin-left: 10px;
+            }}
+            .connected {{
+                background: #4CAF50;
+                color: white;
+            }}
+            .disconnected {{
+                background: #F44336;
+                color: white;
             }}
             .metrics-grid {{
                 display: grid;
@@ -71,9 +94,25 @@ def create_dashboard_html(data):
                 border-radius: 15px;
                 box-shadow: 0 5px 20px rgba(0,0,0,0.1);
                 transition: transform 0.3s ease;
+                position: relative;
+                overflow: hidden;
             }}
             .metric-card:hover {{
                 transform: translateY(-5px);
+            }}
+            .metric-card.updating::after {{
+                content: '';
+                position: absolute;
+                top: 0;
+                left: -100%;
+                width: 100%;
+                height: 3px;
+                background: linear-gradient(90deg, transparent, #667eea, transparent);
+                animation: loading 1.5s infinite;
+            }}
+            @keyframes loading {{
+                0% {{ left: -100%; }}
+                100% {{ left: 100%; }}
             }}
             .metric-label {{
                 color: #666;
@@ -105,7 +144,7 @@ def create_dashboard_html(data):
             .chart-wrapper {{
                 position: relative;
                 width: 100%;
-                height: 400px;  /* Hauteur fixe */
+                height: 400px;
                 margin: 0 auto;
             }}
             .chart-title {{
@@ -113,6 +152,31 @@ def create_dashboard_html(data):
                 font-weight: bold;
                 color: #333;
                 margin-bottom: 20px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }}
+            .controls {{
+                display: flex;
+                gap: 10px;
+                align-items: center;
+            }}
+            .refresh-btn {{
+                background: #667eea;
+                color: white;
+                border: none;
+                padding: 5px 15px;
+                border-radius: 5px;
+                cursor: pointer;
+                font-size: 12px;
+                transition: background 0.3s ease;
+            }}
+            .refresh-btn:hover {{
+                background: #5a67d8;
+            }}
+            .refresh-btn:disabled {{
+                background: #ccc;
+                cursor: not-allowed;
             }}
             .tabs {{
                 display: flex;
@@ -153,7 +217,7 @@ def create_dashboard_html(data):
             .indicator-chart {{
                 position: relative;
                 width: 100%;
-                height: 250px;  /* Hauteur fixe pour les petits graphiques */
+                height: 250px;
             }}
             .historical-table {{
                 width: 100%;
@@ -186,7 +250,6 @@ def create_dashboard_html(data):
                 border-radius: 5px;
                 font-size: 12px;
                 font-weight: bold;
-                margin-left: 10px;
             }}
             .open {{
                 background: #4CAF50;
@@ -201,40 +264,62 @@ def create_dashboard_html(data):
                 width: 100% !important;
                 height: 100% !important;
             }}
+            .toast {{
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                background: white;
+                padding: 15px 25px;
+                border-radius: 10px;
+                box-shadow: 0 5px 20px rgba(0,0,0,0.2);
+                transform: translateX(400px);
+                transition: transform 0.3s ease;
+                z-index: 1000;
+            }}
+            .toast.show {{
+                transform: translateX(0);
+            }}
+            .toast.success {{ border-left: 4px solid #4CAF50; }}
+            .toast.error {{ border-left: 4px solid #F44336; }}
+            .toast.warning {{ border-left: 4px solid #FF9800; }}
         </style>
     </head>
     <body>
         <div class="dashboard">
             <div class="header">
                 <div class="symbol-title">
-                    {data['symbol']} <span>• Analyse en temps réel</span>
-                    <span class="market-status {'open' if data['market_open'] else 'closed'}">
+                    <span id="symbol">{data['symbol']}</span> 
+                    <span>• Analyse en temps réel</span>
+                    <span id="marketStatus" class="market-status {'open' if data['market_open'] else 'closed'}">
                         {'🟢 Ouvert' if data['market_open'] else '🔴 Fermé'}
                     </span>
+                    <span id="connectionStatus" class="connection-status connected">
+                        <span class="dot"></span> Connecté
+                    </span>
                 </div>
-                <div class="last-update">Dernière mise à jour: {data['last_update']}</div>
+                <div class="last-update" id="lastUpdate">Dernière mise à jour: {data['last_update']}</div>
             </div>
             
-            <div class="metrics-grid">
-                <div class="metric-card">
+            <div class="metrics-grid" id="metricsGrid">
+                <div class="metric-card" id="priceCard">
                     <div class="metric-label">Cours</div>
-                    <div class="metric-value">{data['price']:.2f} €</div>
-                    <div class="metric-change {'positive' if data['change'] >= 0 else 'negative'}">
+                    <div class="metric-value" id="price">{data['price']:.2f} €</div>
+                    <div class="metric-change" id="priceChange" class="{'positive' if data['change'] >= 0 else 'negative'}">
                         {data['change']:+.2f}%
                     </div>
                 </div>
-                <div class="metric-card">
+                <div class="metric-card" id="volumeCard">
                     <div class="metric-label">Volume</div>
-                    <div class="metric-value">{data['volume']:,}</div>
+                    <div class="metric-value" id="volume">{data['volume']:,}</div>
                 </div>
-                <div class="metric-card">
+                <div class="metric-card" id="peCard">
                     <div class="metric-label">P/E</div>
-                    <div class="metric-value">{data['pe_ratio']:.2f}</div>
+                    <div class="metric-value" id="pe">{data['pe_ratio']:.2f}</div>
                 </div>
-                <div class="metric-card">
+                <div class="metric-card" id="dividendCard">
                     <div class="metric-label">Dividende</div>
-                    <div class="metric-value">{data['dividend']:.2f} €</div>
-                    <div class="metric-change positive">{data['dividend_yield']:.2f}%</div>
+                    <div class="metric-value" id="dividend">{data['dividend']:.2f} €</div>
+                    <div class="metric-change positive" id="yield">{data['dividend_yield']:.2f}%</div>
                 </div>
             </div>
 
@@ -246,7 +331,12 @@ def create_dashboard_html(data):
             
             <div id="chart" class="tab-content active">
                 <div class="chart-container">
-                    <div class="chart-title">Évolution du cours - {data['period']}</div>
+                    <div class="chart-title">
+                        <span>Évolution du cours - <span id="period">{data['period']}</span></span>
+                        <div class="controls">
+                            <button class="refresh-btn" onclick="requestRefresh()" id="refreshBtn">🔄 Rafraîchir</button>
+                        </div>
+                    </div>
                     <div class="chart-wrapper">
                         <canvas id="priceChart"></canvas>
                     </div>
@@ -255,7 +345,7 @@ def create_dashboard_html(data):
             
             <div id="historical" class="tab-content">
                 <div class="chart-container">
-                    <table class="historical-table">
+                    <table class="historical-table" id="historicalTable">
                         <thead>
                             <tr>
                                 <th>Date</th>
@@ -266,7 +356,7 @@ def create_dashboard_html(data):
                                 <th>Volume</th>
                             </tr>
                         </thead>
-                        <tbody>
+                        <tbody id="historicalBody">
                             {''.join(data['historical_rows'])}
                         </tbody>
                     </table>
@@ -293,67 +383,164 @@ def create_dashboard_html(data):
             </div>
             
             <div class="footer">
-                © 2026 Dashboard Financier - Données en temps réel
+                © 2026 Dashboard Financier - Communication JavaScript active
             </div>
         </div>
 
+        <div id="toast" class="toast"></div>
+
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <script>
+            // ==================== CONFIGURATION ====================
+            const DEBUG = true;
             let priceChart, rsiChart, macdChart;
+            let autoRefreshInterval = null;
+            let isRefreshing = false;
+            let lastData = {json.dumps(data)};
             
-            function showTab(tabId) {{
-                document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
-                document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            // ==================== COMMUNICATION STREAMLIT ====================
+            
+            // Envoyer des données à Streamlit
+            function sendToStreamlit(type, data) {{
+                const message = {{
+                    type: type,
+                    data: data,
+                    timestamp: new Date().toISOString()
+                }};
                 
-                event.target.classList.add('active');
-                document.getElementById(tabId).classList.add('active');
+                if (DEBUG) console.log('📤 Envoi à Streamlit:', message);
                 
-                // Redessiner les graphiques après le changement d'onglet
-                setTimeout(() => {{
-                    if (tabId === 'chart' && priceChart) {{
-                        priceChart.update();
-                    }} else if (tabId === 'indicators') {{
-                        if (rsiChart) rsiChart.update();
-                        if (macdChart) macdChart.update();
-                    }}
-                }}, 100);
+                // Utiliser l'API de communication de Streamlit
+                if (window.Streamlit) {{
+                    window.Streamlit.setComponentValue(message);
+                }} else {{
+                    // Fallback pour le développement
+                    if (DEBUG) console.log('⚠️ Streamlit API non disponible');
+                }}
             }}
             
-            // Données reçues
-            const stockData = {json.dumps(data)};
+            // Recevoir des données de Streamlit
+            window.addEventListener('message', function(event) {{
+                if (event.data.type === 'streamlit:data') {{
+                    const newData = event.data.data;
+                    if (DEBUG) console.log('📥 Réception de Streamlit:', newData);
+                    updateDashboard(newData);
+                }}
+            }});
             
-            // Générer des données pour les graphiques
-            function generateChartData() {{
+            // ==================== MISE À JOUR DU DASHBOARD ====================
+            
+            function updateDashboard(newData) {{
+                if (DEBUG) console.log('🔄 Mise à jour du dashboard avec:', newData);
+                
+                // Mettre à jour les métriques
+                updateMetrics(newData);
+                
+                // Mettre à jour les graphiques
+                updateCharts(newData);
+                
+                // Mettre à jour la table historique
+                if (newData.historical_rows) {{
+                    updateHistoricalTable(newData.historical_rows);
+                }}
+                
+                // Mettre à jour la date
+                document.getElementById('lastUpdate').textContent = 
+                    `Dernière mise à jour: ${{newData.last_update || new Date().toLocaleString('fr-FR')}}`;
+                
+                // Mettre à jour le statut du marché
+                updateMarketStatus(newData.market_open);
+                
+                // Sauvegarder les dernières données
+                lastData = newData;
+                
+                // Afficher une notification
+                showToast('Données mises à jour', 'success');
+            }}
+            
+            function updateMetrics(data) {{
+                // Prix
+                const priceEl = document.getElementById('price');
+                const priceChangeEl = document.getElementById('priceChange');
+                if (priceEl) {{
+                    priceEl.textContent = data.price.toFixed(2) + ' €';
+                    priceEl.classList.add('updating');
+                    setTimeout(() => priceEl.classList.remove('updating'), 500);
+                }}
+                if (priceChangeEl) {{
+                    priceChangeEl.textContent = (data.change >= 0 ? '+' : '') + data.change.toFixed(2) + '%';
+                    priceChangeEl.className = 'metric-change ' + (data.change >= 0 ? 'positive' : 'negative');
+                }}
+                
+                // Volume
+                const volumeEl = document.getElementById('volume');
+                if (volumeEl) {{
+                    volumeEl.textContent = data.volume.toLocaleString();
+                    volumeEl.classList.add('updating');
+                    setTimeout(() => volumeEl.classList.remove('updating'), 500);
+                }}
+                
+                // P/E
+                const peEl = document.getElementById('pe');
+                if (peEl) {{
+                    peEl.textContent = data.pe_ratio.toFixed(2);
+                    peEl.classList.add('updating');
+                    setTimeout(() => peEl.classList.remove('updating'), 500);
+                }}
+                
+                // Dividende
+                const dividendEl = document.getElementById('dividend');
+                const yieldEl = document.getElementById('yield');
+                if (dividendEl) {{
+                    dividendEl.textContent = data.dividend.toFixed(2) + ' €';
+                    dividendEl.classList.add('updating');
+                    setTimeout(() => dividendEl.classList.remove('updating'), 500);
+                }}
+                if (yieldEl) {{
+                    yieldEl.textContent = data.dividend_yield.toFixed(2) + '%';
+                }}
+            }}
+            
+            function updateMarketStatus(isOpen) {{
+                const statusEl = document.getElementById('marketStatus');
+                if (statusEl) {{
+                    statusEl.textContent = isOpen ? '🟢 Ouvert' : '🔴 Fermé';
+                    statusEl.className = 'market-status ' + (isOpen ? 'open' : 'closed');
+                }}
+            }}
+            
+            function updateHistoricalTable(rows) {{
+                const tbody = document.getElementById('historicalBody');
+                if (tbody && rows) {{
+                    tbody.innerHTML = rows.join('');
+                }}
+            }}
+            
+            // ==================== GRAPHIQUES ====================
+            
+            function generateChartData(basePrice) {{
                 const dates = [];
                 const prices = [];
-                const volumes = [];
-                let currentPrice = stockData.price;
+                let currentPrice = basePrice;
                 
                 for (let i = 30; i >= 0; i--) {{
                     const date = new Date();
                     date.setDate(date.getDate() - i);
                     dates.push(date.toLocaleDateString('fr-FR'));
                     
-                    // Variation aléatoire pour simuler le marché
                     const change = (Math.random() - 0.5) * 0.03;
                     currentPrice = currentPrice * (1 + change);
                     prices.push(currentPrice);
-                    
-                    // Volume aléatoire
-                    volumes.push(Math.floor(20000 + Math.random() * 30000));
                 }}
                 
-                return {{ dates, prices, volumes }};
+                return {{ dates, prices }};
             }}
             
-            // Créer le graphique principal
             function createPriceChart() {{
                 const ctx = document.getElementById('priceChart').getContext('2d');
-                const {{ dates, prices }} = generateChartData();
+                const {{ dates, prices }} = generateChartData(lastData.price);
                 
-                if (priceChart) {{
-                    priceChart.destroy();
-                }}
+                if (priceChart) priceChart.destroy();
                 
                 priceChart = new Chart(ctx, {{
                     type: 'line',
@@ -374,47 +561,23 @@ def create_dashboard_html(data):
                     options: {{
                         responsive: true,
                         maintainAspectRatio: false,
-                        plugins: {{
-                            legend: {{
-                                display: false
-                            }}
-                        }},
+                        plugins: {{ legend: {{ display: false }} }},
                         scales: {{
                             y: {{
                                 beginAtZero: false,
-                                grid: {{
-                                    color: 'rgba(0,0,0,0.05)',
-                                    drawBorder: true
-                                }},
-                                ticks: {{
-                                    callback: function(value, index, values) {{
-                                        return value.toFixed(2) + ' €';
-                                    }}
-                                }}
-                            }},
-                            x: {{
-                                grid: {{
-                                    display: false
-                                }}
+                                ticks: {{ callback: v => v.toFixed(2) + ' €' }}
                             }}
-                        }},
-                        interaction: {{
-                            intersect: false,
-                            mode: 'index'
                         }}
                     }}
                 }});
             }}
             
-            // Créer le graphique RSI
             function createRSIChart() {{
                 const ctx = document.getElementById('rsiChart').getContext('2d');
-                const {{ dates }} = generateChartData();
+                const {{ dates }} = generateChartData(lastData.price);
                 const rsiData = Array.from({{length: 31}}, () => 30 + Math.random() * 40);
                 
-                if (rsiChart) {{
-                    rsiChart.destroy();
-                }}
+                if (rsiChart) rsiChart.destroy();
                 
                 rsiChart = new Chart(ctx, {{
                     type: 'line',
@@ -433,144 +596,131 @@ def create_dashboard_html(data):
                     options: {{
                         responsive: true,
                         maintainAspectRatio: false,
-                        plugins: {{
-                            legend: {{
-                                display: false
-                            }},
-                            annotation: {{
-                                annotations: {{
-                                    line70: {{
-                                        type: 'line',
-                                        yMin: 70,
-                                        yMax: 70,
-                                        borderColor: '#F44336',
-                                        borderWidth: 2,
-                                        borderDash: [6, 6],
-                                        label: {{
-                                            content: 'Surachaté (70)',
-                                            enabled: true,
-                                            position: 'end'
-                                        }}
-                                    }},
-                                    line30: {{
-                                        type: 'line',
-                                        yMin: 30,
-                                        yMax: 30,
-                                        borderColor: '#4CAF50',
-                                        borderWidth: 2,
-                                        borderDash: [6, 6],
-                                        label: {{
-                                            content: 'Survendu (30)',
-                                            enabled: true,
-                                            position: 'end'
-                                        }}
-                                    }}
-                                }}
-                            }}
-                        }},
-                        scales: {{
-                            y: {{
-                                min: 0,
-                                max: 100,
-                                grid: {{
-                                    color: 'rgba(0,0,0,0.05)'
-                                }}
-                            }},
-                            x: {{
-                                grid: {{
-                                    display: false
-                                }}
-                            }}
-                        }}
+                        plugins: {{ legend: {{ display: false }} }},
+                        scales: {{ y: {{ min: 0, max: 100 }} }}
                     }}
                 }});
             }}
             
-            // Créer le graphique MACD
             function createMACDChart() {{
                 const ctx = document.getElementById('macdChart').getContext('2d');
-                const {{ dates }} = generateChartData();
+                const {{ dates }} = generateChartData(lastData.price);
                 
-                // Générer des données MACD simulées
                 const macdData = [];
                 const signalData = [];
-                let macd = 0;
-                
                 for (let i = 0; i < 31; i++) {{
-                    macd = Math.sin(i / 5) * 2 + Math.random() * 0.5;
-                    macdData.push(macd);
-                    signalData.push(macd * 0.8 + Math.random() * 0.2);
+                    macdData.push(Math.sin(i / 5) * 2 + Math.random() * 0.5);
+                    signalData.push(macdData[i] * 0.8 + Math.random() * 0.2);
                 }}
                 
-                if (macdChart) {{
-                    macdChart.destroy();
-                }}
+                if (macdChart) macdChart.destroy();
                 
                 macdChart = new Chart(ctx, {{
                     type: 'line',
                     data: {{
                         labels: dates,
                         datasets: [
-                            {{
-                                label: 'MACD',
-                                data: macdData,
-                                borderColor: '#2196F3',
-                                backgroundColor: 'transparent',
-                                tension: 0.1,
-                                borderWidth: 2
-                            }},
-                            {{
-                                label: 'Signal',
-                                data: signalData,
-                                borderColor: '#FF9800',
-                                backgroundColor: 'transparent',
-                                tension: 0.1,
-                                borderWidth: 2
-                            }}
+                            {{ label: 'MACD', data: macdData, borderColor: '#2196F3', borderWidth: 2 }},
+                            {{ label: 'Signal', data: signalData, borderColor: '#FF9800', borderWidth: 2 }}
                         ]
                     }},
                     options: {{
                         responsive: true,
                         maintainAspectRatio: false,
-                        plugins: {{
-                            legend: {{
-                                display: false
-                            }}
-                        }},
-                        scales: {{
-                            y: {{
-                                grid: {{
-                                    color: 'rgba(0,0,0,0.05)'
-                                }}
-                            }},
-                            x: {{
-                                grid: {{
-                                    display: false
-                                }}
-                            }}
-                        }}
+                        plugins: {{ legend: {{ display: false }} }}
                     }}
                 }});
             }}
             
-            // Initialiser les graphiques
+            function updateCharts(data) {{
+                if (priceChart) {{
+                    const {{ dates, prices }} = generateChartData(data.price);
+                    priceChart.data.labels = dates;
+                    priceChart.data.datasets[0].data = prices;
+                    priceChart.update();
+                }}
+            }}
+            
+            // ==================== INTERACTIONS ====================
+            
+            function showTab(tabId) {{
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                
+                event.target.classList.add('active');
+                document.getElementById(tabId).classList.add('active');
+                
+                sendToStreamlit('tab_change', {{ tab: tabId }});
+            }}
+            
+            function requestRefresh() {{
+                if (isRefreshing) return;
+                
+                isRefreshing = true;
+                const btn = document.getElementById('refreshBtn');
+                btn.disabled = true;
+                btn.textContent = '⏳ Chargement...';
+                
+                sendToStreamlit('refresh_request', {{ 
+                    symbol: lastData.symbol,
+                    timestamp: new Date().toISOString()
+                }});
+                
+                setTimeout(() => {{
+                    isRefreshing = false;
+                    btn.disabled = false;
+                    btn.textContent = '🔄 Rafraîchir';
+                }}, 2000);
+            }}
+            
+            function showToast(message, type = 'info') {{
+                const toast = document.getElementById('toast');
+                toast.textContent = message;
+                toast.className = `toast ${{type}} show`;
+                
+                setTimeout(() => {{
+                    toast.classList.remove('show');
+                }}, 3000);
+            }}
+            
+            // ==================== AUTO-REFRESH ====================
+            
+            function startAutoRefresh(seconds) {{
+                if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+                autoRefreshInterval = setInterval(() => {{
+                    requestRefresh();
+                }}, seconds * 1000);
+                showToast(`Auto-refresh toutes les ${{seconds}}s`, 'info');
+            }}
+            
+            function stopAutoRefresh() {{
+                if (autoRefreshInterval) {{
+                    clearInterval(autoRefreshInterval);
+                    autoRefreshInterval = null;
+                    showToast('Auto-refresh arrêté', 'warning');
+                }}
+            }}
+            
+            // ==================== INITIALISATION ====================
+            
             window.onload = function() {{
                 createPriceChart();
                 createRSIChart();
                 createMACDChart();
+                
+                // Envoyer un message d'initialisation
+                sendToStreamlit('dashboard_ready', {{
+                    symbol: lastData.symbol,
+                    timestamp: new Date().toISOString()
+                }});
+                
+                if (DEBUG) console.log('✅ Dashboard initialisé');
             }};
             
-            // Redimensionner les graphiques quand la fenêtre change
             window.addEventListener('resize', function() {{
-                if (priceChart) {{
-                    priceChart.resize();
-                }}
-                if (rsiChart) {{
-                    rsiChart.resize();
-                }}
-                if (macdChart) {{
-                    macdChart.resize();
-                }}
+                [priceChart, rsiChart, macdChart].forEach(chart => {{
+                    if (chart) chart.resize();
+                }});
             }});
         </script>
     </body>
@@ -630,7 +780,7 @@ def generate_historical_rows():
     return rows
 
 def main():
-    st.title("📊 Dashboard Financier - Graphiques Fixes")
+    st.title("📊 Dashboard Financier - Communication JavaScript")
     
     # Sidebar
     with st.sidebar:
@@ -648,15 +798,19 @@ def main():
             index=2
         )
         
-        chart_height = st.slider(
-            "Hauteur du graphique",
-            min_value=300,
-            max_value=600,
-            value=400,
-            step=50
-        )
+        auto_refresh = st.checkbox("Auto-refresh", value=False)
+        if auto_refresh:
+            refresh_rate = st.slider("Fréquence (s)", 5, 60, 30)
         
-        refresh = st.button("🔄 Rafraîchir")
+        st.markdown("---")
+        st.subheader("📡 Communication")
+        st.info("""
+        **Événements JavaScript:**
+        - 🟢 Dashboard prêt
+        - 🔄 Rafraîchissement
+        - 📊 Changement d'onglet
+        - 📈 Mise à jour données
+        """)
     
     # Récupérer les données
     stock_data = generate_mock_data(symbol)
@@ -680,23 +834,20 @@ def main():
     }
     
     # Afficher le dashboard
-    st.components.v1.html(
-        create_dashboard_html(dashboard_data),
-        height=1200,
-        scrolling=True
-    )
+    dashboard_html = create_dashboard_html(dashboard_data)
+    st.components.v1.html(dashboard_html, height=1200, scrolling=True)
     
-    # Métriques en bas
-    with st.expander("📊 Données en temps réel"):
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Cours", f"{stock_data['price']:.2f} €", f"{stock_data['change']:.2f}%")
-        with col2:
-            st.metric("Volume", f"{stock_data['volume']:,}")
-        with col3:
-            st.metric("P/E", f"{stock_data['pe_ratio']:.2f}")
-        with col4:
-            st.metric("Dividende", f"{stock_data['dividend']:.2f} €")
+    # Zone pour les messages JavaScript
+    with st.expander("📨 Messages reçus du JavaScript"):
+        message_placeholder = st.empty()
+        
+        # Simuler la réception de messages (dans une vraie app, utilisez st.session_state)
+        if 'js_messages' not in st.session_state:
+            st.session_state.js_messages = []
+        
+        # Afficher les derniers messages
+        for msg in st.session_state.js_messages[-5:]:
+            st.json(msg)
 
 if __name__ == "__main__":
     main()
