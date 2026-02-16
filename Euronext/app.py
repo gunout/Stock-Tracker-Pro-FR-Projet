@@ -1,4 +1,4 @@
-# app.py - Version complète avec toutes les fonctionnalités
+# app.py - Version complète et corrigée
 import streamlit as st
 from datetime import datetime, timedelta
 import pandas as pd
@@ -1070,6 +1070,7 @@ def main():
     st.caption("Toutes les fonctionnalités: API réelles, BDD, Alertes, Multi-symboles, Export")
     
     db = DatabaseManager()
+    period = "1H"  # Valeur par défaut
     
     with st.sidebar:
         st.header("⚙️ Configuration")
@@ -1154,43 +1155,90 @@ def main():
             if st.button("▶️ Reprendre", use_container_width=True):
                 st.session_state.paused = False
     
+    # ==================== CORPS PRINCIPAL ====================
+    
+    # Mode comparaison
     if st.session_state.comparison_mode:
         st.subheader("📈 Mode Comparaison Multi-symboles")
+        
+        # Récupérer les données pour tous les symboles
         all_data = {}
         for symbol in st.session_state.current_symbols:
             data = generate_live_data(symbol, st.session_state.api_source, st.session_state.api_key)
             all_data[symbol] = data
+            
+            # Sauvegarder dans la BDD
             db.save_price(symbol, data)
+            
+            # Vérifier les alertes
             triggered = db.check_alerts(symbol, data['price'])
             if triggered:
-                st.warning(f"🔔 Alerte {symbol}: {data['price']} €")
+                for alert in triggered:
+                    st.warning(f"🔔 Alerte {symbol}: Prix à {data['price']} €")
+                    st.session_state.alerts.append({
+                        'symbol': symbol,
+                        'price': data['price'],
+                        'time': datetime.now().isoformat()
+                    })
         
+        # Graphique de comparaison
         fig = create_comparison_chart(all_data)
         st.plotly_chart(fig, use_container_width=True)
         
+        # Tableau comparatif
+        st.subheader("📊 Comparaison en direct")
         comparison_data = []
         for symbol, data in all_data.items():
             comparison_data.append({
                 "Symbole": symbol,
                 "Prix": f"{data['price']:.2f} €",
-                "Var": f"{data['change']:+.2f}%",
+                "Variation": f"{data['change']:+.2f}%",
                 "Volume": f"{data['volume']:,}",
                 "P/E": f"{data.get('pe_ratio', 0):.2f}",
-                "Dividende": f"{data.get('dividend', 0):.2f} €"
+                "Dividende": f"{data.get('dividend', 0):.2f} €",
+                "Rendement": f"{data.get('dividend_yield', 0):.2f}%",
+                "Source": data.get('source', 'Simulation')
             })
-        st.dataframe(pd.DataFrame(comparison_data), use_container_width=True, hide_index=True)
+        
+        df = pd.DataFrame(comparison_data)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        
+        # Graphiques individuels dans des expanders
+        for symbol, data in all_data.items():
+            with st.expander(f"📈 Détails {symbol}"):
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Cours", f"{data['price']:.2f} €", f"{data['change']:+.2f}%")
+                with col2:
+                    st.metric("Volume", f"{data['volume']:,}")
+                with col3:
+                    pe = data.get('pe_ratio', 0)
+                    st.metric("P/E", f"{pe:.2f}" if pe > 0 else "N/A")
+                with col4:
+                    div = data.get('dividend', 0)
+                    yield_val = data.get('dividend_yield', 0)
+                    st.metric("Dividende", f"{div:.2f} €" if div > 0 else "N/A", f"{yield_val:.2f}%" if yield_val > 0 else None)
     
-        else:
+    else:
         # Mode simple
         symbol = st.session_state.current_symbols[0]
         data = generate_live_data(symbol, st.session_state.api_source, st.session_state.api_key)
         st.session_state.update_counter += 1
         st.session_state.last_update = datetime.now()
         
+        # Sauvegarder dans la BDD
         db.save_price(symbol, data)
+        
+        # Vérifier les alertes
         triggered = db.check_alerts(symbol, data['price'])
         if triggered:
-            st.warning(f"🔔 Alerte {symbol}: {data['price']} €")
+            for alert in triggered:
+                st.warning(f"🔔 Alerte {symbol}: Prix à {data['price']} €")
+                st.session_state.alerts.append({
+                    'symbol': symbol,
+                    'price': data['price'],
+                    'time': datetime.now().isoformat()
+                })
         
         # Afficher les alertes récentes
         if st.session_state.alerts:
@@ -1212,6 +1260,7 @@ def main():
             yield_val = data.get('dividend_yield', 0)
             st.metric("Dividende", f"{div:.2f} €" if div > 0 else "N/A", f"{yield_val:.2f}%" if yield_val > 0 else None)
         
+        # Source des données
         st.caption(f"Source: {data.get('source', 'Simulation')}")
         
         # Préparer les données pour le dashboard
@@ -1232,10 +1281,8 @@ def main():
             'historical_rows': generate_historical_rows(data)
         }
         
-        # ✅ ÉTAPE 1 : Générer le code HTML
+        # Générer et afficher le dashboard HTML
         dashboard_html = create_dashboard_html(dashboard_data, st.session_state.update_counter, comparison_mode=False)
-        
-        # ✅ ÉTAPE 2 : Afficher le HTML dans Streamlit
         st.components.v1.html(dashboard_html, height=1200)
         
         # Historique BDD
@@ -1245,3 +1292,11 @@ def main():
                 st.dataframe(history[['timestamp', 'price', 'change', 'volume']], use_container_width=True)
             else:
                 st.info("Aucun historique disponible")
+    
+    # ==================== AUTO-REFRESH ====================
+    if not st.session_state.get('paused', False):
+        time.sleep(3)
+        st.rerun()
+
+if __name__ == "__main__":
+    main()
