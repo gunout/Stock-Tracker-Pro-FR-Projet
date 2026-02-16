@@ -1,9 +1,9 @@
-# src/api/client.py
+# api/client.py
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import streamlit as st
-from src.config.settings import APIConfig
+from config.settings import APIConfig  # ✅ Plus de "src."
 
 class FinancialAPIClient:
     """Client API avec gestion intelligente des rate limits"""
@@ -72,25 +72,3 @@ class FinancialAPIClient:
         except Exception as e:
             st.error(f"Erreur inattendue: {str(e)}")
             return None
-    
-    def get_multiple_stocks(self, symbols: list):
-        """Récupère plusieurs actions avec gestion intelligente"""
-        results = {}
-        
-        with st.spinner("Chargement des données..."):
-            progress_bar = st.progress(0)
-            
-            for i, symbol in enumerate(symbols):
-                # Récupération des données
-                data = self.get_stock_data(symbol)
-                if data:
-                    results[symbol] = data
-                
-                # Mise à jour progression
-                progress_bar.progress((i + 1) / len(symbols))
-                
-                # Pause entre les requêtes
-                if i < len(symbols) - 1:
-                    time.sleep(1)  # Évite de bombarder l'API
-                    
-        return results
