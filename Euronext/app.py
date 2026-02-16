@@ -1223,7 +1223,7 @@ def main():
             'historical_rows': generate_historical_rows(data)
         }
         
-        html(dashboard_data, height=1200)
+        st.components.v1.html(dashboard_html, height=1200)
         
         with st.expander("📊 Historique"):
             history = db.get_history(symbol, days=1)
@@ -1236,3 +1236,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
