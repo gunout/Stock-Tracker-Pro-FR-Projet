@@ -1,11 +1,10 @@
-# app.py - Version avec mise à jour toutes les 3 secondes
+# app.py - Version corrigée
 import streamlit as st
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 import json
 import time
-import threading
 from streamlit.components.v1 import html
 
 # Configuration de la page
@@ -24,6 +23,10 @@ if 'update_counter' not in st.session_state:
     st.session_state.update_counter = 0
 if 'current_symbol' not in st.session_state:
     st.session_state.current_symbol = "MC.PA"
+if 'paused' not in st.session_state:
+    st.session_state.paused = False
+if 'js_messages' not in st.session_state:
+    st.session_state.js_messages = []
 
 def generate_live_data(symbol):
     """Génère des données en direct avec variations réalistes"""
@@ -72,11 +75,13 @@ def generate_live_data(symbol):
     }
 
 def generate_historical_rows(data):
-    """Génère les lignes du tableau historique en direct"""
+    """Génère les lignes du tableau historique en direct - VERSION CORRIGÉE"""
     rows = []
+    now = datetime.now()
+    
     for i in range(10):
-        date = datetime.now()
-        date = date.replace(second=date.second - i*30)  # Espacement de 30 secondes
+        # Utiliser timedelta pour éviter les valeurs négatives
+        date = now - timedelta(seconds=i*30)
         
         # Variation autour du prix actuel
         price_variation = np.random.uniform(-5, 5)
@@ -518,6 +523,7 @@ def create_dashboard_html(data, update_counter):
             let isRefreshing = false;
             let lastData = {json.dumps(data)};
             let updateCounter = {update_counter};
+            let timerInterval;
             
             // ==================== COMMUNICATION AVEC STREAMLIT ====================
             
@@ -548,7 +554,7 @@ def create_dashboard_html(data, update_counter):
                 updateCounter++;
                 
                 // Mettre à jour le compteur
-                document.getElementById('updateCounter').textContent = `Mise à jour #{updateCounter}`;
+                document.getElementById('updateCounter').textContent = `Mise à jour #${{updateCounter}}`;
                 
                 // Animation des cartes
                 document.querySelectorAll('.metric-card').forEach(card => {{
@@ -561,12 +567,21 @@ def create_dashboard_html(data, update_counter):
                     counter: updateCounter
                 }});
                 
-                // Reset après animation
+                // Simuler une mise à jour des données (pour la démo)
                 setTimeout(() => {{
-                    document.querySelectorAll('.metric-card').forEach(card => {{
-                        card.classList.remove('updating');
-                    }});
-                    isRefreshing = false;
+                    // Générer de nouvelles données simulées
+                    const newPrice = lastData.price * (1 + (Math.random() - 0.5) * 0.02);
+                    const newChange = ((newPrice - lastData.price) / lastData.price * 100).toFixed(2);
+                    
+                    const newData = {{
+                        ...lastData,
+                        price: newPrice,
+                        change: parseFloat(newChange),
+                        volume: Math.floor(lastData.volume * (0.9 + Math.random() * 0.2)),
+                        last_update: new Date().toLocaleTimeString('fr-FR')
+                    }};
+                    
+                    updateDashboard(newData);
                 }}, 500);
             }}
             
@@ -591,16 +606,20 @@ def create_dashboard_html(data, update_counter):
                 document.getElementById('lastUpdate').textContent = 
                     `Dernière mise à jour: ${{newData.last_update}}`;
                 
-                // Mettre à jour le tableau historique
-                if (newData.historical_rows) {{
-                    document.getElementById('historicalBody').innerHTML = newData.historical_rows.join('');
-                }}
+                // Mettre à jour le tableau historique (simulé)
+                updateHistoricalTable();
                 
                 // Mettre à jour les graphiques
                 updateCharts(newData);
                 
                 // Sauvegarder les données
                 lastData = newData;
+                
+                // Reset animation
+                document.querySelectorAll('.metric-card').forEach(card => {{
+                    card.classList.remove('updating');
+                }});
+                isRefreshing = false;
                 
                 // Notification
                 showToast('Données mises à jour en direct', 'success');
@@ -612,6 +631,35 @@ def create_dashboard_html(data, update_counter):
                     el.textContent = newValue;
                     el.classList.add('changed');
                     setTimeout(() => el.classList.remove('changed'), 500);
+                }}
+            }}
+            
+            function updateHistoricalTable() {{
+                // Simuler la mise à jour du tableau
+                const tbody = document.getElementById('historicalBody');
+                if (tbody) {{
+                    const rows = tbody.querySelectorAll('tr');
+                    for (let i = rows.length - 1; i > 0; i--) {{
+                        const cells = rows[i-1].querySelectorAll('td');
+                        const currentCells = rows[i].querySelectorAll('td');
+                        for (let j = 0; j < cells.length; j++) {{
+                            if (currentCells[j]) {{
+                                cells[j].textContent = currentCells[j].textContent;
+                            }}
+                        }}
+                    }}
+                    
+                    // Nouvelle première ligne
+                    const firstRow = rows[0];
+                    if (firstRow) {{
+                        const cells = firstRow.querySelectorAll('td');
+                        cells[0].textContent = new Date().toLocaleTimeString('fr-FR');
+                        cells[1].textContent = (lastData.price - Math.random() * 2).toFixed(2) + ' €';
+                        cells[2].textContent = (lastData.price + Math.random() * 2).toFixed(2) + ' €';
+                        cells[3].textContent = (lastData.price - Math.random() * 3).toFixed(2) + ' €';
+                        cells[4].textContent = lastData.price.toFixed(2) + ' €';
+                        cells[5].textContent = Math.floor(lastData.volume * (0.9 + Math.random() * 0.2)).toLocaleString();
+                    }}
                 }}
             }}
             
@@ -762,17 +810,17 @@ def create_dashboard_html(data, update_counter):
                 const timerEl = document.getElementById('timer');
                 countdown = 3;
                 
-                const timer = setInterval(() => {{
+                if (timerInterval) clearInterval(timerInterval);
+                
+                timerInterval = setInterval(() => {{
                     countdown--;
-                    timerEl.textContent = `Prochaine mise à jour dans ${countdown}s`;
+                    timerEl.textContent = `Prochaine mise à jour dans ${{countdown}}s`;
                     
                     if (countdown <= 0) {{
                         countdown = 3;
                         requestDataUpdate();
                     }}
                 }}, 1000);
-                
-                return timer;
             }}
             
             // ==================== INTERACTIONS ====================
@@ -818,7 +866,7 @@ def create_dashboard_html(data, update_counter):
                 createMACDChart();
                 
                 // Démarrer le timer
-                const timer = startTimer();
+                startTimer();
                 
                 // Envoyer un message d'initialisation
                 sendToStreamlit('dashboard_ready', {{
@@ -929,10 +977,6 @@ def main():
     
     # Zone de debug pour les messages
     with st.expander("📨 Messages reçus du JavaScript"):
-        if 'js_messages' not in st.session_state:
-            st.session_state.js_messages = []
-        
-        # Simuler la réception de messages (dans une vraie app, utilisez st.query_params)
         col1, col2 = st.columns(2)
         with col1:
             if st.button("📤 Simuler envoi au JS"):
