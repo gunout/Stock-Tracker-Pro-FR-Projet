@@ -1,29 +1,109 @@
-# app.py - Version avec communication JavaScript
+# app.py - Version avec mise à jour toutes les 3 secondes
 import streamlit as st
 from datetime import datetime
 import pandas as pd
 import numpy as np
 import json
 import time
-import random
+import threading
+from streamlit.components.v1 import html
 
 # Configuration de la page
 st.set_page_config(
-    page_title="Dashboard Financier MC.PA",
+    page_title="Dashboard Financier Live MC.PA",
     page_icon="📊",
     layout="wide"
 )
 
-def create_dashboard_html(data):
-    """Crée le HTML du dashboard avec communication JavaScript"""
+# Initialisation du session state
+if 'last_update' not in st.session_state:
+    st.session_state.last_update = datetime.now()
+if 'data_history' not in st.session_state:
+    st.session_state.data_history = []
+if 'update_counter' not in st.session_state:
+    st.session_state.update_counter = 0
+if 'current_symbol' not in st.session_state:
+    st.session_state.current_symbol = "MC.PA"
+
+def generate_live_data(symbol):
+    """Génère des données en direct avec variations réalistes"""
+    base_prices = {
+        'MC.PA': 519.60,
+        'RMS.PA': 2450.00,
+        'KER.PA': 320.00,
+        'CDI.PA': 65.50,
+        'AI.PA': 180.30,
+        'OR.PA': 95.20
+    }
     
-    html = f"""
+    base_volumes = {
+        'MC.PA': 26164,
+        'RMS.PA': 15000,
+        'KER.PA': 50000,
+        'CDI.PA': 35000,
+        'AI.PA': 28000,
+        'OR.PA': 42000
+    }
+    
+    base_price = base_prices.get(symbol, 100.00)
+    base_volume = base_volumes.get(symbol, 20000)
+    
+    # Variation aléatoire réaliste (entre -2% et +2%)
+    price_change = np.random.uniform(-2.0, 2.0)
+    new_price = base_price * (1 + price_change/100)
+    
+    # Variation du volume
+    volume_change = np.random.uniform(-15, 15)
+    new_volume = int(base_volume * (1 + volume_change/100))
+    
+    # Calcul des autres métriques
+    pe_ratio = new_price / np.random.uniform(15, 25)
+    dividend = new_price * np.random.uniform(0.02, 0.04)
+    
+    return {
+        'symbol': symbol,
+        'price': round(new_price, 2),
+        'change': round(price_change, 2),
+        'volume': new_volume,
+        'pe_ratio': round(pe_ratio, 2),
+        'dividend': round(dividend, 2),
+        'dividend_yield': round((dividend / new_price) * 100, 2),
+        'timestamp': datetime.now().isoformat()
+    }
+
+def generate_historical_rows(data):
+    """Génère les lignes du tableau historique en direct"""
+    rows = []
+    for i in range(10):
+        date = datetime.now()
+        date = date.replace(second=date.second - i*30)  # Espacement de 30 secondes
+        
+        # Variation autour du prix actuel
+        price_variation = np.random.uniform(-5, 5)
+        historical_price = data['price'] * (1 + price_variation/100)
+        
+        rows.append(f"""
+            <tr>
+                <td>{date.strftime('%H:%M:%S')}</td>
+                <td>{historical_price - np.random.uniform(0.5, 2):.2f} €</td>
+                <td>{historical_price + np.random.uniform(0.5, 2):.2f} €</td>
+                <td>{historical_price - np.random.uniform(1, 3):.2f} €</td>
+                <td>{historical_price:.2f} €</td>
+                <td>{int(data['volume'] * np.random.uniform(0.8, 1.2)):,}</td>
+            </tr>
+        """)
+    return rows
+
+def create_dashboard_html(data, update_counter):
+    """Crée le HTML du dashboard avec mise à jour automatique"""
+    
+    html_code = f"""
     <!DOCTYPE html>
     <html lang="fr">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Dashboard Financier</title>
+        <title>Dashboard Financier Live</title>
         <style>
             * {{
                 margin: 0;
@@ -57,12 +137,29 @@ def create_dashboard_html(data):
                 gap: 10px;
                 flex-wrap: wrap;
             }}
-            .symbol-title span {{
-                color: #667eea;
-            }}
-            .last-update {{
-                color: #666;
+            .live-badge {{
+                background: #ff4444;
+                color: white;
+                padding: 5px 15px;
+                border-radius: 20px;
                 font-size: 14px;
+                display: inline-flex;
+                align-items: center;
+                gap: 5px;
+                animation: pulse 2s infinite;
+            }}
+            @keyframes pulse {{
+                0% {{ opacity: 1; }}
+                50% {{ opacity: 0.7; }}
+                100% {{ opacity: 1; }}
+            }}
+            .update-counter {{
+                background: #667eea;
+                color: white;
+                padding: 5px 15px;
+                border-radius: 20px;
+                font-size: 14px;
+                margin-left: 10px;
             }}
             .connection-status {{
                 display: inline-flex;
@@ -78,10 +175,6 @@ def create_dashboard_html(data):
                 background: #4CAF50;
                 color: white;
             }}
-            .disconnected {{
-                background: #F44336;
-                color: white;
-            }}
             .metrics-grid {{
                 display: grid;
                 grid-template-columns: repeat(4, 1fr);
@@ -93,12 +186,13 @@ def create_dashboard_html(data):
                 padding: 20px;
                 border-radius: 15px;
                 box-shadow: 0 5px 20px rgba(0,0,0,0.1);
-                transition: transform 0.3s ease;
+                transition: all 0.3s ease;
                 position: relative;
                 overflow: hidden;
             }}
-            .metric-card:hover {{
-                transform: translateY(-5px);
+            .metric-card.updating {{
+                transform: scale(1.02);
+                box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
             }}
             .metric-card.updating::after {{
                 content: '';
@@ -126,9 +220,14 @@ def create_dashboard_html(data):
                 font-weight: bold;
                 color: #333;
                 margin-bottom: 5px;
+                transition: color 0.3s ease;
+            }}
+            .metric-value.changed {{
+                color: #667eea;
             }}
             .metric-change {{
                 font-size: 14px;
+                transition: all 0.3s ease;
             }}
             .positive {{ color: #4CAF50; }}
             .negative {{ color: #F44336; }}
@@ -156,6 +255,14 @@ def create_dashboard_html(data):
                 justify-content: space-between;
                 align-items: center;
             }}
+            .timer {{
+                font-family: monospace;
+                font-size: 16px;
+                color: #667eea;
+                background: #f0f0f0;
+                padding: 5px 10px;
+                border-radius: 5px;
+            }}
             .controls {{
                 display: flex;
                 gap: 10px;
@@ -165,18 +272,20 @@ def create_dashboard_html(data):
                 background: #667eea;
                 color: white;
                 border: none;
-                padding: 5px 15px;
+                padding: 8px 20px;
                 border-radius: 5px;
                 cursor: pointer;
-                font-size: 12px;
-                transition: background 0.3s ease;
+                font-size: 14px;
+                transition: all 0.3s ease;
             }}
             .refresh-btn:hover {{
                 background: #5a67d8;
+                transform: scale(1.05);
             }}
             .refresh-btn:disabled {{
                 background: #ccc;
                 cursor: not-allowed;
+                transform: none;
             }}
             .tabs {{
                 display: flex;
@@ -282,6 +391,7 @@ def create_dashboard_html(data):
             .toast.success {{ border-left: 4px solid #4CAF50; }}
             .toast.error {{ border-left: 4px solid #F44336; }}
             .toast.warning {{ border-left: 4px solid #FF9800; }}
+            .toast.info {{ border-left: 4px solid #2196F3; }}
         </style>
     </head>
     <body>
@@ -289,15 +399,21 @@ def create_dashboard_html(data):
             <div class="header">
                 <div class="symbol-title">
                     <span id="symbol">{data['symbol']}</span> 
-                    <span>• Analyse en temps réel</span>
-                    <span id="marketStatus" class="market-status {'open' if data['market_open'] else 'closed'}">
-                        {'🟢 Ouvert' if data['market_open'] else '🔴 Fermé'}
+                    <span>• Trading en direct</span>
+                    <span class="live-badge">
+                        <span>🔴 LIVE</span>
                     </span>
+                    <span id="updateCounter" class="update-counter">Mise à jour #{update_counter}</span>
                     <span id="connectionStatus" class="connection-status connected">
-                        <span class="dot"></span> Connecté
+                        📡 Connecté
                     </span>
                 </div>
-                <div class="last-update" id="lastUpdate">Dernière mise à jour: {data['last_update']}</div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div class="last-update" id="lastUpdate">
+                        Dernière mise à jour: {data['last_update']}
+                    </div>
+                    <div class="timer" id="timer">Prochaine mise à jour dans 3s</div>
+                </div>
             </div>
             
             <div class="metrics-grid" id="metricsGrid">
@@ -332,9 +448,9 @@ def create_dashboard_html(data):
             <div id="chart" class="tab-content active">
                 <div class="chart-container">
                     <div class="chart-title">
-                        <span>Évolution du cours - <span id="period">{data['period']}</span></span>
+                        <span>Évolution en direct - <span id="period">{data['period']}</span></span>
                         <div class="controls">
-                            <button class="refresh-btn" onclick="requestRefresh()" id="refreshBtn">🔄 Rafraîchir</button>
+                            <button class="refresh-btn" onclick="forceRefresh()" id="refreshBtn">🔄 Rafraîchir maintenant</button>
                         </div>
                     </div>
                     <div class="chart-wrapper">
@@ -345,10 +461,14 @@ def create_dashboard_html(data):
             
             <div id="historical" class="tab-content">
                 <div class="chart-container">
+                    <div class="chart-title">
+                        <span>Transactions récentes</span>
+                        <span class="live-badge" style="font-size: 12px;">Mise à jour en direct</span>
+                    </div>
                     <table class="historical-table" id="historicalTable">
                         <thead>
                             <tr>
-                                <th>Date</th>
+                                <th>Heure</th>
                                 <th>Ouverture</th>
                                 <th>Plus haut</th>
                                 <th>Plus bas</th>
@@ -367,13 +487,13 @@ def create_dashboard_html(data):
                 <div class="chart-container">
                     <div class="indicators-grid">
                         <div>
-                            <div class="chart-title">RSI (14)</div>
+                            <div class="chart-title">RSI (14) - Direct</div>
                             <div class="indicator-chart">
                                 <canvas id="rsiChart"></canvas>
                             </div>
                         </div>
                         <div>
-                            <div class="chart-title">MACD</div>
+                            <div class="chart-title">MACD - Direct</div>
                             <div class="indicator-chart">
                                 <canvas id="macdChart"></canvas>
                             </div>
@@ -383,7 +503,7 @@ def create_dashboard_html(data):
             </div>
             
             <div class="footer">
-                © 2026 Dashboard Financier - Communication JavaScript active
+                © 2026 Dashboard Financier - Mise à jour toutes les 3 secondes
             </div>
         </div>
 
@@ -392,144 +512,126 @@ def create_dashboard_html(data):
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <script>
             // ==================== CONFIGURATION ====================
-            const DEBUG = true;
             let priceChart, rsiChart, macdChart;
-            let autoRefreshInterval = null;
+            let updateInterval = 3000; // 3 secondes
+            let countdown = 3;
             let isRefreshing = false;
             let lastData = {json.dumps(data)};
+            let updateCounter = {update_counter};
             
-            // ==================== COMMUNICATION STREAMLIT ====================
+            // ==================== COMMUNICATION AVEC STREAMLIT ====================
             
-            // Envoyer des données à Streamlit
             function sendToStreamlit(type, data) {{
                 const message = {{
                     type: type,
                     data: data,
+                    counter: updateCounter,
                     timestamp: new Date().toISOString()
                 }};
                 
-                if (DEBUG) console.log('📤 Envoi à Streamlit:', message);
+                console.log('📤 Envoi à Streamlit:', message);
                 
-                // Utiliser l'API de communication de Streamlit
-                if (window.Streamlit) {{
-                    window.Streamlit.setComponentValue(message);
-                }} else {{
-                    // Fallback pour le développement
-                    if (DEBUG) console.log('⚠️ Streamlit API non disponible');
+                if (window.parent) {{
+                    window.parent.postMessage({{
+                        type: 'streamlit:message',
+                        data: message
+                    }}, '*');
                 }}
             }}
             
-            // Recevoir des données de Streamlit
-            window.addEventListener('message', function(event) {{
-                if (event.data.type === 'streamlit:data') {{
-                    const newData = event.data.data;
-                    if (DEBUG) console.log('📥 Réception de Streamlit:', newData);
-                    updateDashboard(newData);
-                }}
-            }});
+            // ==================== MISE À JOUR DES DONNÉES ====================
             
-            // ==================== MISE À JOUR DU DASHBOARD ====================
+            function requestDataUpdate() {{
+                if (isRefreshing) return;
+                
+                isRefreshing = true;
+                updateCounter++;
+                
+                // Mettre à jour le compteur
+                document.getElementById('updateCounter').textContent = `Mise à jour #{updateCounter}`;
+                
+                // Animation des cartes
+                document.querySelectorAll('.metric-card').forEach(card => {{
+                    card.classList.add('updating');
+                }});
+                
+                // Envoyer la requête à Streamlit
+                sendToStreamlit('request_update', {{
+                    symbol: lastData.symbol,
+                    counter: updateCounter
+                }});
+                
+                // Reset après animation
+                setTimeout(() => {{
+                    document.querySelectorAll('.metric-card').forEach(card => {{
+                        card.classList.remove('updating');
+                    }});
+                    isRefreshing = false;
+                }}, 500);
+            }}
             
             function updateDashboard(newData) {{
-                if (DEBUG) console.log('🔄 Mise à jour du dashboard avec:', newData);
+                console.log('📥 Réception nouvelles données:', newData);
                 
-                // Mettre à jour les métriques
-                updateMetrics(newData);
+                // Mettre à jour les métriques avec animation
+                updateMetricWithAnimation('price', newData.price.toFixed(2) + ' €');
+                updateMetricWithAnimation('volume', newData.volume.toLocaleString());
+                updateMetricWithAnimation('pe', newData.pe_ratio.toFixed(2));
+                updateMetricWithAnimation('dividend', newData.dividend.toFixed(2) + ' €');
+                
+                // Mettre à jour la variation
+                const changeEl = document.getElementById('priceChange');
+                changeEl.textContent = (newData.change >= 0 ? '+' : '') + newData.change.toFixed(2) + '%';
+                changeEl.className = 'metric-change ' + (newData.change >= 0 ? 'positive' : 'negative');
+                
+                // Mettre à jour le rendement
+                document.getElementById('yield').textContent = newData.dividend_yield.toFixed(2) + '%';
+                
+                // Mettre à jour la date
+                document.getElementById('lastUpdate').textContent = 
+                    `Dernière mise à jour: ${{newData.last_update}}`;
+                
+                // Mettre à jour le tableau historique
+                if (newData.historical_rows) {{
+                    document.getElementById('historicalBody').innerHTML = newData.historical_rows.join('');
+                }}
                 
                 // Mettre à jour les graphiques
                 updateCharts(newData);
                 
-                // Mettre à jour la table historique
-                if (newData.historical_rows) {{
-                    updateHistoricalTable(newData.historical_rows);
-                }}
-                
-                // Mettre à jour la date
-                document.getElementById('lastUpdate').textContent = 
-                    `Dernière mise à jour: ${{newData.last_update || new Date().toLocaleString('fr-FR')}}`;
-                
-                // Mettre à jour le statut du marché
-                updateMarketStatus(newData.market_open);
-                
-                // Sauvegarder les dernières données
+                // Sauvegarder les données
                 lastData = newData;
                 
-                // Afficher une notification
-                showToast('Données mises à jour', 'success');
+                // Notification
+                showToast('Données mises à jour en direct', 'success');
             }}
             
-            function updateMetrics(data) {{
-                // Prix
-                const priceEl = document.getElementById('price');
-                const priceChangeEl = document.getElementById('priceChange');
-                if (priceEl) {{
-                    priceEl.textContent = data.price.toFixed(2) + ' €';
-                    priceEl.classList.add('updating');
-                    setTimeout(() => priceEl.classList.remove('updating'), 500);
-                }}
-                if (priceChangeEl) {{
-                    priceChangeEl.textContent = (data.change >= 0 ? '+' : '') + data.change.toFixed(2) + '%';
-                    priceChangeEl.className = 'metric-change ' + (data.change >= 0 ? 'positive' : 'negative');
-                }}
-                
-                // Volume
-                const volumeEl = document.getElementById('volume');
-                if (volumeEl) {{
-                    volumeEl.textContent = data.volume.toLocaleString();
-                    volumeEl.classList.add('updating');
-                    setTimeout(() => volumeEl.classList.remove('updating'), 500);
-                }}
-                
-                // P/E
-                const peEl = document.getElementById('pe');
-                if (peEl) {{
-                    peEl.textContent = data.pe_ratio.toFixed(2);
-                    peEl.classList.add('updating');
-                    setTimeout(() => peEl.classList.remove('updating'), 500);
-                }}
-                
-                // Dividende
-                const dividendEl = document.getElementById('dividend');
-                const yieldEl = document.getElementById('yield');
-                if (dividendEl) {{
-                    dividendEl.textContent = data.dividend.toFixed(2) + ' €';
-                    dividendEl.classList.add('updating');
-                    setTimeout(() => dividendEl.classList.remove('updating'), 500);
-                }}
-                if (yieldEl) {{
-                    yieldEl.textContent = data.dividend_yield.toFixed(2) + '%';
-                }}
-            }}
-            
-            function updateMarketStatus(isOpen) {{
-                const statusEl = document.getElementById('marketStatus');
-                if (statusEl) {{
-                    statusEl.textContent = isOpen ? '🟢 Ouvert' : '🔴 Fermé';
-                    statusEl.className = 'market-status ' + (isOpen ? 'open' : 'closed');
-                }}
-            }}
-            
-            function updateHistoricalTable(rows) {{
-                const tbody = document.getElementById('historicalBody');
-                if (tbody && rows) {{
-                    tbody.innerHTML = rows.join('');
+            function updateMetricWithAnimation(id, newValue) {{
+                const el = document.getElementById(id);
+                if (el && el.textContent !== newValue) {{
+                    el.textContent = newValue;
+                    el.classList.add('changed');
+                    setTimeout(() => el.classList.remove('changed'), 500);
                 }}
             }}
             
             // ==================== GRAPHIQUES ====================
             
             function generateChartData(basePrice) {{
+                const points = 30;
                 const dates = [];
                 const prices = [];
                 let currentPrice = basePrice;
                 
-                for (let i = 30; i >= 0; i--) {{
+                for (let i = points; i >= 0; i--) {{
                     const date = new Date();
-                    date.setDate(date.getDate() - i);
-                    dates.push(date.toLocaleDateString('fr-FR'));
+                    date.setSeconds(date.getSeconds() - i * 3);
+                    dates.push(date.toLocaleTimeString('fr-FR'));
                     
-                    const change = (Math.random() - 0.5) * 0.03;
-                    currentPrice = currentPrice * (1 + change);
+                    if (i > 0) {{
+                        const change = (Math.random() - 0.5) * 0.02;
+                        currentPrice = currentPrice * (1 + change);
+                    }}
                     prices.push(currentPrice);
                 }}
                 
@@ -553,18 +655,18 @@ def create_dashboard_html(data):
                             backgroundColor: 'rgba(102, 126, 234, 0.1)',
                             tension: 0.1,
                             fill: true,
-                            pointRadius: 3,
-                            pointHoverRadius: 5,
+                            pointRadius: 2,
+                            pointHoverRadius: 4,
                             borderWidth: 2
                         }}]
                     }},
                     options: {{
                         responsive: true,
                         maintainAspectRatio: false,
+                        animation: {{ duration: 300 }},
                         plugins: {{ legend: {{ display: false }} }},
                         scales: {{
                             y: {{
-                                beginAtZero: false,
                                 ticks: {{ callback: v => v.toFixed(2) + ' €' }}
                             }}
                         }}
@@ -584,7 +686,6 @@ def create_dashboard_html(data):
                     data: {{
                         labels: dates,
                         datasets: [{{
-                            label: 'RSI',
                             data: rsiData,
                             borderColor: '#FF9800',
                             backgroundColor: 'rgba(255, 152, 0, 0.1)',
@@ -596,6 +697,7 @@ def create_dashboard_html(data):
                     options: {{
                         responsive: true,
                         maintainAspectRatio: false,
+                        animation: {{ duration: 300 }},
                         plugins: {{ legend: {{ display: false }} }},
                         scales: {{ y: {{ min: 0, max: 100 }} }}
                     }}
@@ -609,7 +711,7 @@ def create_dashboard_html(data):
                 const macdData = [];
                 const signalData = [];
                 for (let i = 0; i < 31; i++) {{
-                    macdData.push(Math.sin(i / 5) * 2 + Math.random() * 0.5);
+                    macdData.push(Math.sin(i / 5) * 2 + Math.random() * 0.3);
                     signalData.push(macdData[i] * 0.8 + Math.random() * 0.2);
                 }}
                 
@@ -620,13 +722,14 @@ def create_dashboard_html(data):
                     data: {{
                         labels: dates,
                         datasets: [
-                            {{ label: 'MACD', data: macdData, borderColor: '#2196F3', borderWidth: 2 }},
-                            {{ label: 'Signal', data: signalData, borderColor: '#FF9800', borderWidth: 2 }}
+                            {{ data: macdData, borderColor: '#2196F3', borderWidth: 2 }},
+                            {{ data: signalData, borderColor: '#FF9800', borderWidth: 2 }}
                         ]
                     }},
                     options: {{
                         responsive: true,
                         maintainAspectRatio: false,
+                        animation: {{ duration: 300 }},
                         plugins: {{ legend: {{ display: false }} }}
                     }}
                 }});
@@ -639,6 +742,37 @@ def create_dashboard_html(data):
                     priceChart.data.datasets[0].data = prices;
                     priceChart.update();
                 }}
+                
+                if (rsiChart) {{
+                    const {{ dates }} = generateChartData(data.price);
+                    rsiChart.data.labels = dates;
+                    rsiChart.update();
+                }}
+                
+                if (macdChart) {{
+                    const {{ dates }} = generateChartData(data.price);
+                    macdChart.data.labels = dates;
+                    macdChart.update();
+                }}
+            }}
+            
+            // ==================== TIMER ====================
+            
+            function startTimer() {{
+                const timerEl = document.getElementById('timer');
+                countdown = 3;
+                
+                const timer = setInterval(() => {{
+                    countdown--;
+                    timerEl.textContent = `Prochaine mise à jour dans ${countdown}s`;
+                    
+                    if (countdown <= 0) {{
+                        countdown = 3;
+                        requestDataUpdate();
+                    }}
+                }}, 1000);
+                
+                return timer;
             }}
             
             // ==================== INTERACTIONS ====================
@@ -653,24 +787,17 @@ def create_dashboard_html(data):
                 sendToStreamlit('tab_change', {{ tab: tabId }});
             }}
             
-            function requestRefresh() {{
-                if (isRefreshing) return;
-                
-                isRefreshing = true;
+            function forceRefresh() {{
                 const btn = document.getElementById('refreshBtn');
                 btn.disabled = true;
                 btn.textContent = '⏳ Chargement...';
                 
-                sendToStreamlit('refresh_request', {{ 
-                    symbol: lastData.symbol,
-                    timestamp: new Date().toISOString()
-                }});
+                requestDataUpdate();
                 
                 setTimeout(() => {{
-                    isRefreshing = false;
                     btn.disabled = false;
-                    btn.textContent = '🔄 Rafraîchir';
-                }}, 2000);
+                    btn.textContent = '🔄 Rafraîchir maintenant';
+                }}, 1000);
             }}
             
             function showToast(message, type = 'info') {{
@@ -680,25 +807,7 @@ def create_dashboard_html(data):
                 
                 setTimeout(() => {{
                     toast.classList.remove('show');
-                }}, 3000);
-            }}
-            
-            // ==================== AUTO-REFRESH ====================
-            
-            function startAutoRefresh(seconds) {{
-                if (autoRefreshInterval) clearInterval(autoRefreshInterval);
-                autoRefreshInterval = setInterval(() => {{
-                    requestRefresh();
-                }}, seconds * 1000);
-                showToast(`Auto-refresh toutes les ${{seconds}}s`, 'info');
-            }}
-            
-            function stopAutoRefresh() {{
-                if (autoRefreshInterval) {{
-                    clearInterval(autoRefreshInterval);
-                    autoRefreshInterval = null;
-                    showToast('Auto-refresh arrêté', 'warning');
-                }}
+                }}, 2000);
             }}
             
             // ==================== INITIALISATION ====================
@@ -708,13 +817,16 @@ def create_dashboard_html(data):
                 createRSIChart();
                 createMACDChart();
                 
+                // Démarrer le timer
+                const timer = startTimer();
+                
                 // Envoyer un message d'initialisation
                 sendToStreamlit('dashboard_ready', {{
                     symbol: lastData.symbol,
-                    timestamp: new Date().toISOString()
+                    message: 'Dashboard prêt - Mise à jour toutes les 3s'
                 }});
                 
-                if (DEBUG) console.log('✅ Dashboard initialisé');
+                console.log('✅ Dashboard live initialisé - Mise à jour toutes les 3s');
             }};
             
             window.addEventListener('resize', function() {{
@@ -722,98 +834,76 @@ def create_dashboard_html(data):
                     if (chart) chart.resize();
                 }});
             }});
+            
+            // ==================== RÉCEPTION DES DONNÉES ====================
+            
+            window.addEventListener('message', function(event) {{
+                if (event.data.type === 'streamlit:update') {{
+                    updateDashboard(event.data.data);
+                }}
+            }});
         </script>
     </body>
     </html>
     """
-    return html
-
-def generate_mock_data(symbol):
-    """Génère des données simulées"""
-    mock_data = {
-        'MC.PA': {
-            'symbol': 'MC.PA',
-            'price': 519.60,
-            'change': -0.93,
-            'volume': 26164,
-            'pe_ratio': 23.76,
-            'dividend': 13.00,
-            'dividend_yield': 2.48
-        },
-        'RMS.PA': {
-            'symbol': 'RMS.PA',
-            'price': 2450.00,
-            'change': 0.85,
-            'volume': 15000,
-            'pe_ratio': 48.50,
-            'dividend': 15.00,
-            'dividend_yield': 0.61
-        },
-        'KER.PA': {
-            'symbol': 'KER.PA',
-            'price': 320.00,
-            'change': -1.20,
-            'volume': 50000,
-            'pe_ratio': 18.30,
-            'dividend': 4.50,
-            'dividend_yield': 1.40
-        }
-    }
-    return mock_data.get(symbol, mock_data['MC.PA'])
-
-def generate_historical_rows():
-    """Génère les lignes du tableau historique"""
-    rows = []
-    for i in range(10):
-        date = datetime.now()
-        date = date.replace(day=date.day - i)
-        rows.append(f"""
-            <tr>
-                <td>{date.strftime('%d/%m/%Y')}</td>
-                <td>{500 + np.random.randn()*10:.2f} €</td>
-                <td>{520 + np.random.randn()*10:.2f} €</td>
-                <td>{480 + np.random.randn()*10:.2f} €</td>
-                <td>{510 + np.random.randn()*10:.2f} €</td>
-                <td>{np.random.randint(20000, 30000):,}</td>
-            </tr>
-        """)
-    return rows
+    return html_code
 
 def main():
-    st.title("📊 Dashboard Financier - Communication JavaScript")
+    st.title("📈 Trading en Direct - Mise à jour toutes les 3 secondes")
     
     # Sidebar
     with st.sidebar:
-        st.header("⚙️ Configuration")
+        st.header("⚙️ Configuration Live")
         
         symbol = st.selectbox(
             "Symbole",
             options=["MC.PA", "RMS.PA", "KER.PA", "CDI.PA", "AI.PA", "OR.PA"],
-            index=0
+            index=0,
+            key="symbol_selector"
         )
         
+        st.session_state.current_symbol = symbol
+        
         period = st.selectbox(
-            "Période",
-            options=["1J", "1S", "1M", "3M", "1Y"],
+            "Période d'affichage",
+            options=["1H", "4H", "1J", "1S", "1M"],
             index=2
         )
         
-        auto_refresh = st.checkbox("Auto-refresh", value=False)
-        if auto_refresh:
-            refresh_rate = st.slider("Fréquence (s)", 5, 60, 30)
+        st.markdown("---")
+        st.subheader("📊 Statistiques live")
+        
+        # Afficher le compteur de mises à jour
+        st.metric(
+            "Mises à jour effectuées",
+            st.session_state.update_counter,
+            delta="+1 toutes les 3s"
+        )
+        
+        # Dernière mise à jour
+        st.caption(f"Dernière mise à jour: {st.session_state.last_update.strftime('%H:%M:%S')}")
+        
+        # Bouton de contrôle
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("⏸️ Pause", use_container_width=True):
+                st.session_state.paused = True
+        with col2:
+            if st.button("▶️ Reprendre", use_container_width=True):
+                st.session_state.paused = False
         
         st.markdown("---")
-        st.subheader("📡 Communication")
         st.info("""
-        **Événements JavaScript:**
-        - 🟢 Dashboard prêt
-        - 🔄 Rafraîchissement
-        - 📊 Changement d'onglet
-        - 📈 Mise à jour données
+        **🔄 Mise à jour automatique**
+        - Intervalle: 3 secondes
+        - Données en temps réel
+        - Graphiques dynamiques
         """)
     
-    # Récupérer les données
-    stock_data = generate_mock_data(symbol)
+    # Générer les données en direct
+    data = generate_live_data(symbol)
+    st.session_state.update_counter += 1
+    st.session_state.last_update = datetime.now()
     
     # Préparer les données pour le dashboard
     market_hour = datetime.now().hour
@@ -821,33 +911,57 @@ def main():
     
     dashboard_data = {
         'symbol': symbol,
-        'price': stock_data['price'],
-        'change': stock_data['change'],
-        'volume': stock_data['volume'],
-        'pe_ratio': stock_data['pe_ratio'],
-        'dividend': stock_data['dividend'],
-        'dividend_yield': stock_data['dividend_yield'],
-        'last_update': datetime.now().strftime('%d/%m/%Y %H:%M:%S'),
+        'price': data['price'],
+        'change': data['change'],
+        'volume': data['volume'],
+        'pe_ratio': data['pe_ratio'],
+        'dividend': data['dividend'],
+        'dividend_yield': data['dividend_yield'],
+        'last_update': datetime.now().strftime('%H:%M:%S'),
         'market_open': market_open,
         'period': period,
-        'historical_rows': generate_historical_rows()
+        'historical_rows': generate_historical_rows(data)
     }
     
     # Afficher le dashboard
-    dashboard_html = create_dashboard_html(dashboard_data)
-    st.components.v1.html(dashboard_html, height=1200, scrolling=True)
+    dashboard_html = create_dashboard_html(dashboard_data, st.session_state.update_counter)
+    html(dashboard_html, height=1200)
     
-    # Zone pour les messages JavaScript
+    # Zone de debug pour les messages
     with st.expander("📨 Messages reçus du JavaScript"):
-        message_placeholder = st.empty()
-        
-        # Simuler la réception de messages (dans une vraie app, utilisez st.session_state)
         if 'js_messages' not in st.session_state:
             st.session_state.js_messages = []
+        
+        # Simuler la réception de messages (dans une vraie app, utilisez st.query_params)
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("📤 Simuler envoi au JS"):
+                st.components.v1.html("""
+                <script>
+                    window.parent.postMessage({
+                        type: 'streamlit:update',
+                        data: {
+                            price: 520.50,
+                            change: 0.75,
+                            volume: 28150,
+                            last_update: new Date().toLocaleTimeString('fr-FR')
+                        }
+                    }, '*');
+                </script>
+                """, height=0)
+        
+        with col2:
+            if st.button("🗑️ Effacer les messages"):
+                st.session_state.js_messages = []
         
         # Afficher les derniers messages
         for msg in st.session_state.js_messages[-5:]:
             st.json(msg)
+    
+    # Auto-refresh toutes les 3 secondes
+    if not st.session_state.get('paused', False):
+        time.sleep(3)
+        st.rerun()
 
 if __name__ == "__main__":
     main()
