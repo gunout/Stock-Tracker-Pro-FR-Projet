@@ -1180,7 +1180,8 @@ def main():
             })
         st.dataframe(pd.DataFrame(comparison_data), use_container_width=True, hide_index=True)
     
-    else:
+        else:
+        # Mode simple
         symbol = st.session_state.current_symbols[0]
         data = generate_live_data(symbol, st.session_state.api_source, st.session_state.api_key)
         st.session_state.update_counter += 1
@@ -1191,6 +1192,13 @@ def main():
         if triggered:
             st.warning(f"🔔 Alerte {symbol}: {data['price']} €")
         
+        # Afficher les alertes récentes
+        if st.session_state.alerts:
+            with st.expander("🔔 Alertes récentes"):
+                for alert in st.session_state.alerts[-5:]:
+                    st.info(f"{alert['symbol']} - {alert['price']} € à {alert['time'][11:19]}")
+        
+        # Métriques principales
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Cours", f"{data['price']:.2f} €", f"{data['change']:+.2f}%")
@@ -1206,6 +1214,7 @@ def main():
         
         st.caption(f"Source: {data.get('source', 'Simulation')}")
         
+        # Préparer les données pour le dashboard
         market_hour = datetime.now().hour
         market_open = 9 <= market_hour < 17
         
@@ -1223,17 +1232,16 @@ def main():
             'historical_rows': generate_historical_rows(data)
         }
         
+        # ✅ ÉTAPE 1 : Générer le code HTML
+        dashboard_html = create_dashboard_html(dashboard_data, st.session_state.update_counter, comparison_mode=False)
+        
+        # ✅ ÉTAPE 2 : Afficher le HTML dans Streamlit
         st.components.v1.html(dashboard_html, height=1200)
         
-        with st.expander("📊 Historique"):
+        # Historique BDD
+        with st.expander("📊 Historique (Base de données)"):
             history = db.get_history(symbol, days=1)
             if not history.empty:
                 st.dataframe(history[['timestamp', 'price', 'change', 'volume']], use_container_width=True)
-    
-    if not st.session_state.get('paused', False):
-        time.sleep(3)
-        st.rerun()
-
-if __name__ == "__main__":
-    main()
-
+            else:
+                st.info("Aucun historique disponible")
