@@ -1,4 +1,4 @@
-# app.py - Version stable avec dashboard intégré
+# app.py - Version avec graphiques fixes
 import streamlit as st
 from datetime import datetime
 import pandas as pd
@@ -6,16 +6,15 @@ import numpy as np
 import json
 import time
 
-# Configuration de la page (PREMIÈRE commande Streamlit)
+# Configuration de la page
 st.set_page_config(
     page_title="Dashboard Financier MC.PA",
     page_icon="📊",
     layout="wide"
 )
 
-# Fonction pour générer le dashboard HTML
 def create_dashboard_html(data):
-    """Crée le HTML du dashboard avec les données"""
+    """Crée le HTML du dashboard avec graphiques fixes"""
     
     html = f"""
     <!DOCTYPE html>
@@ -100,6 +99,14 @@ def create_dashboard_html(data):
                 border-radius: 15px;
                 box-shadow: 0 10px 40px rgba(0,0,0,0.1);
                 margin-bottom: 30px;
+                position: relative;
+                width: 100%;
+            }}
+            .chart-wrapper {{
+                position: relative;
+                width: 100%;
+                height: 400px;  /* Hauteur fixe */
+                margin: 0 auto;
             }}
             .chart-title {{
                 font-size: 18px;
@@ -111,6 +118,7 @@ def create_dashboard_html(data):
                 display: flex;
                 gap: 10px;
                 margin-bottom: 20px;
+                flex-wrap: wrap;
             }}
             .tab {{
                 padding: 10px 20px;
@@ -136,6 +144,16 @@ def create_dashboard_html(data):
             }}
             .tab-content.active {{
                 display: block;
+            }}
+            .indicators-grid {{
+                display: grid;
+                grid-template-columns: repeat(2, 1fr);
+                gap: 20px;
+            }}
+            .indicator-chart {{
+                position: relative;
+                width: 100%;
+                height: 250px;  /* Hauteur fixe pour les petits graphiques */
             }}
             .historical-table {{
                 width: 100%;
@@ -177,6 +195,11 @@ def create_dashboard_html(data):
             .closed {{
                 background: #F44336;
                 color: white;
+            }}
+            canvas {{
+                display: block;
+                width: 100% !important;
+                height: 100% !important;
             }}
         </style>
     </head>
@@ -224,7 +247,9 @@ def create_dashboard_html(data):
             <div id="chart" class="tab-content active">
                 <div class="chart-container">
                     <div class="chart-title">Évolution du cours - {data['period']}</div>
-                    <canvas id="priceChart" style="width:100%; height:400px;"></canvas>
+                    <div class="chart-wrapper">
+                        <canvas id="priceChart"></canvas>
+                    </div>
                 </div>
             </div>
             
@@ -250,14 +275,18 @@ def create_dashboard_html(data):
             
             <div id="indicators" class="tab-content">
                 <div class="chart-container">
-                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px;">
+                    <div class="indicators-grid">
                         <div>
                             <div class="chart-title">RSI (14)</div>
-                            <canvas id="rsiChart" style="width:100%; height:200px;"></canvas>
+                            <div class="indicator-chart">
+                                <canvas id="rsiChart"></canvas>
+                            </div>
                         </div>
                         <div>
                             <div class="chart-title">MACD</div>
-                            <canvas id="macdChart" style="width:100%; height:200px;"></canvas>
+                            <div class="indicator-chart">
+                                <canvas id="macdChart"></canvas>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -278,6 +307,16 @@ def create_dashboard_html(data):
                 
                 event.target.classList.add('active');
                 document.getElementById(tabId).classList.add('active');
+                
+                // Redessiner les graphiques après le changement d'onglet
+                setTimeout(() => {{
+                    if (tabId === 'chart' && priceChart) {{
+                        priceChart.update();
+                    }} else if (tabId === 'indicators') {{
+                        if (rsiChart) rsiChart.update();
+                        if (macdChart) macdChart.update();
+                    }}
+                }}, 100);
             }}
             
             // Données reçues
@@ -287,6 +326,7 @@ def create_dashboard_html(data):
             function generateChartData() {{
                 const dates = [];
                 const prices = [];
+                const volumes = [];
                 let currentPrice = stockData.price;
                 
                 for (let i = 30; i >= 0; i--) {{
@@ -294,17 +334,26 @@ def create_dashboard_html(data):
                     date.setDate(date.getDate() - i);
                     dates.push(date.toLocaleDateString('fr-FR'));
                     
-                    currentPrice = currentPrice * (1 + (Math.random() - 0.5) * 0.02);
+                    // Variation aléatoire pour simuler le marché
+                    const change = (Math.random() - 0.5) * 0.03;
+                    currentPrice = currentPrice * (1 + change);
                     prices.push(currentPrice);
+                    
+                    // Volume aléatoire
+                    volumes.push(Math.floor(20000 + Math.random() * 30000));
                 }}
                 
-                return {{ dates, prices }};
+                return {{ dates, prices, volumes }};
             }}
             
             // Créer le graphique principal
             function createPriceChart() {{
                 const ctx = document.getElementById('priceChart').getContext('2d');
                 const {{ dates, prices }} = generateChartData();
+                
+                if (priceChart) {{
+                    priceChart.destroy();
+                }}
                 
                 priceChart = new Chart(ctx, {{
                     type: 'line',
@@ -318,7 +367,8 @@ def create_dashboard_html(data):
                             tension: 0.1,
                             fill: true,
                             pointRadius: 3,
-                            pointHoverRadius: 5
+                            pointHoverRadius: 5,
+                            borderWidth: 2
                         }}]
                     }},
                     options: {{
@@ -333,9 +383,24 @@ def create_dashboard_html(data):
                             y: {{
                                 beginAtZero: false,
                                 grid: {{
-                                    color: 'rgba(0,0,0,0.05)'
+                                    color: 'rgba(0,0,0,0.05)',
+                                    drawBorder: true
+                                }},
+                                ticks: {{
+                                    callback: function(value, index, values) {{
+                                        return value.toFixed(2) + ' €';
+                                    }}
+                                }}
+                            }},
+                            x: {{
+                                grid: {{
+                                    display: false
                                 }}
                             }}
+                        }},
+                        interaction: {{
+                            intersect: false,
+                            mode: 'index'
                         }}
                     }}
                 }});
@@ -347,6 +412,10 @@ def create_dashboard_html(data):
                 const {{ dates }} = generateChartData();
                 const rsiData = Array.from({{length: 31}}, () => 30 + Math.random() * 40);
                 
+                if (rsiChart) {{
+                    rsiChart.destroy();
+                }}
+                
                 rsiChart = new Chart(ctx, {{
                     type: 'line',
                     data: {{
@@ -357,7 +426,8 @@ def create_dashboard_html(data):
                             borderColor: '#FF9800',
                             backgroundColor: 'rgba(255, 152, 0, 0.1)',
                             tension: 0.1,
-                            fill: true
+                            fill: true,
+                            borderWidth: 2
                         }}]
                     }},
                     options: {{
@@ -366,6 +436,36 @@ def create_dashboard_html(data):
                         plugins: {{
                             legend: {{
                                 display: false
+                            }},
+                            annotation: {{
+                                annotations: {{
+                                    line70: {{
+                                        type: 'line',
+                                        yMin: 70,
+                                        yMax: 70,
+                                        borderColor: '#F44336',
+                                        borderWidth: 2,
+                                        borderDash: [6, 6],
+                                        label: {{
+                                            content: 'Surachaté (70)',
+                                            enabled: true,
+                                            position: 'end'
+                                        }}
+                                    }},
+                                    line30: {{
+                                        type: 'line',
+                                        yMin: 30,
+                                        yMax: 30,
+                                        borderColor: '#4CAF50',
+                                        borderWidth: 2,
+                                        borderDash: [6, 6],
+                                        label: {{
+                                            content: 'Survendu (30)',
+                                            enabled: true,
+                                            position: 'end'
+                                        }}
+                                    }}
+                                }}
                             }}
                         }},
                         scales: {{
@@ -375,34 +475,36 @@ def create_dashboard_html(data):
                                 grid: {{
                                     color: 'rgba(0,0,0,0.05)'
                                 }}
+                            }},
+                            x: {{
+                                grid: {{
+                                    display: false
+                                }}
                             }}
                         }}
                     }}
                 }});
-                
-                // Ajouter les lignes de seuil
-                const ctx2 = document.getElementById('rsiChart').getContext('2d');
-                ctx2.beginPath();
-                ctx2.strokeStyle = '#F44336';
-                ctx2.setLineDash([5, 5]);
-                ctx2.moveTo(0, 70);
-                ctx2.lineTo(ctx2.canvas.width, 70);
-                ctx2.stroke();
-                
-                ctx2.beginPath();
-                ctx2.strokeStyle = '#4CAF50';
-                ctx2.setLineDash([5, 5]);
-                ctx2.moveTo(0, 30);
-                ctx2.lineTo(ctx2.canvas.width, 30);
-                ctx2.stroke();
             }}
             
             // Créer le graphique MACD
             function createMACDChart() {{
                 const ctx = document.getElementById('macdChart').getContext('2d');
                 const {{ dates }} = generateChartData();
-                const macdData = Array.from({{length: 31}}, (_, i) => Math.sin(i/3) * 2);
-                const signalData = macdData.map(v => v * 0.8);
+                
+                // Générer des données MACD simulées
+                const macdData = [];
+                const signalData = [];
+                let macd = 0;
+                
+                for (let i = 0; i < 31; i++) {{
+                    macd = Math.sin(i / 5) * 2 + Math.random() * 0.5;
+                    macdData.push(macd);
+                    signalData.push(macd * 0.8 + Math.random() * 0.2);
+                }}
+                
+                if (macdChart) {{
+                    macdChart.destroy();
+                }}
                 
                 macdChart = new Chart(ctx, {{
                     type: 'line',
@@ -414,14 +516,16 @@ def create_dashboard_html(data):
                                 data: macdData,
                                 borderColor: '#2196F3',
                                 backgroundColor: 'transparent',
-                                tension: 0.1
+                                tension: 0.1,
+                                borderWidth: 2
                             }},
                             {{
                                 label: 'Signal',
                                 data: signalData,
                                 borderColor: '#FF9800',
                                 backgroundColor: 'transparent',
-                                tension: 0.1
+                                tension: 0.1,
+                                borderWidth: 2
                             }}
                         ]
                     }},
@@ -431,6 +535,18 @@ def create_dashboard_html(data):
                         plugins: {{
                             legend: {{
                                 display: false
+                            }}
+                        }},
+                        scales: {{
+                            y: {{
+                                grid: {{
+                                    color: 'rgba(0,0,0,0.05)'
+                                }}
+                            }},
+                            x: {{
+                                grid: {{
+                                    display: false
+                                }}
                             }}
                         }}
                     }}
@@ -443,6 +559,19 @@ def create_dashboard_html(data):
                 createRSIChart();
                 createMACDChart();
             }};
+            
+            // Redimensionner les graphiques quand la fenêtre change
+            window.addEventListener('resize', function() {{
+                if (priceChart) {{
+                    priceChart.resize();
+                }}
+                if (rsiChart) {{
+                    rsiChart.resize();
+                }}
+                if (macdChart) {{
+                    macdChart.resize();
+                }}
+            }});
         </script>
     </body>
     </html>
@@ -501,40 +630,33 @@ def generate_historical_rows():
     return rows
 
 def main():
-    st.title("📊 Dashboard Financier Intégré")
+    st.title("📊 Dashboard Financier - Graphiques Fixes")
     
-    # Sidebar avec contrôles
+    # Sidebar
     with st.sidebar:
         st.header("⚙️ Configuration")
         
-        # Sélection du symbole
         symbol = st.selectbox(
             "Symbole",
             options=["MC.PA", "RMS.PA", "KER.PA", "CDI.PA", "AI.PA", "OR.PA"],
             index=0
         )
         
-        # Période
         period = st.selectbox(
             "Période",
             options=["1J", "1S", "1M", "3M", "1Y"],
             index=2
         )
         
-        # Mode d'affichage
-        view_mode = st.radio(
-            "Mode d'affichage",
-            ["Dashboard complet", "Vue simple", "Split view"],
-            index=0
+        chart_height = st.slider(
+            "Hauteur du graphique",
+            min_value=300,
+            max_value=600,
+            value=400,
+            step=50
         )
         
-        # Bouton de rafraîchissement
         refresh = st.button("🔄 Rafraîchir")
-        
-        # Actualisation automatique
-        auto_refresh = st.checkbox("Actualisation automatique", value=False)
-        if auto_refresh:
-            refresh_rate = st.slider("Fréquence (secondes)", 5, 60, 30)
     
     # Récupérer les données
     stock_data = generate_mock_data(symbol)
@@ -557,91 +679,24 @@ def main():
         'historical_rows': generate_historical_rows()
     }
     
-    # Afficher selon le mode choisi
-    if view_mode == "Dashboard complet":
-        # Dashboard HTML complet
-        st.components.v1.html(
-            create_dashboard_html(dashboard_data),
-            height=1200,
-            scrolling=True
-        )
-        
-    elif view_mode == "Vue simple":
-        # Vue Streamlit simple
+    # Afficher le dashboard
+    st.components.v1.html(
+        create_dashboard_html(dashboard_data),
+        height=1200,
+        scrolling=True
+    )
+    
+    # Métriques en bas
+    with st.expander("📊 Données en temps réel"):
         col1, col2, col3, col4 = st.columns(4)
-        
         with col1:
-            st.metric(
-                "Cours",
-                f"{stock_data['price']:.2f} €",
-                f"{stock_data['change']:.2f}%"
-            )
-        
+            st.metric("Cours", f"{stock_data['price']:.2f} €", f"{stock_data['change']:.2f}%")
         with col2:
             st.metric("Volume", f"{stock_data['volume']:,}")
-        
         with col3:
             st.metric("P/E", f"{stock_data['pe_ratio']:.2f}")
-        
         with col4:
-            st.metric(
-                "Dividende",
-                f"{stock_data['dividend']:.2f} €",
-                f"{stock_data['dividend_yield']:.2f}%"
-            )
-        
-        # Graphique simple
-        dates = pd.date_range(end=datetime.now(), periods=30, freq='D')
-        prices = [stock_data['price'] * (1 + np.random.randn()*0.02) for _ in range(30)]
-        
-        chart_data = pd.DataFrame({
-            'Date': dates,
-            'Prix': prices
-        })
-        
-        st.line_chart(chart_data.set_index('Date'))
-        
-    else:  # Split view
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("📈 Vue Streamlit")
-            
-            # Métriques
-            st.metric("Cours", f"{stock_data['price']:.2f} €", f"{stock_data['change']:.2f}%")
-            st.metric("Volume", f"{stock_data['volume']:,}")
-            st.metric("P/E", f"{stock_data['pe_ratio']:.2f}")
             st.metric("Dividende", f"{stock_data['dividend']:.2f} €")
-            
-            # Mini graphique
-            dates = pd.date_range(end=datetime.now(), periods=30, freq='D')
-            prices = [stock_data['price'] * (1 + np.random.randn()*0.02) for _ in range(30)]
-            chart_data = pd.DataFrame({'Date': dates, 'Prix': prices})
-            st.line_chart(chart_data.set_index('Date'), height=200)
-        
-        with col2:
-            st.subheader("🎨 Dashboard HTML")
-            st.components.v1.html(
-                create_dashboard_html(dashboard_data),
-                height=600,
-                scrolling=True
-            )
-    
-    # Informations de debug
-    with st.expander("🔧 Informations techniques"):
-        st.json({
-            "symbol": symbol,
-            "mode": view_mode,
-            "auto_refresh": auto_refresh,
-            "last_update": datetime.now().strftime('%H:%M:%S'),
-            "data": stock_data
-        })
-    
-    # Actualisation automatique
-    if auto_refresh and 'refresh_rate' in locals():
-        st.info(f"🔄 Actualisation automatique toutes les {refresh_rate} secondes")
-        time.sleep(refresh_rate)
-        st.rerun()
 
 if __name__ == "__main__":
     main()
