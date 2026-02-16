@@ -1,4 +1,4 @@
-# app.py - Version complète avec API réelle, BDD, Alertes, Multi-symboles, Export
+# app.py - Version corrigée avec gestion des erreurs
 import streamlit as st
 from datetime import datetime, timedelta
 import pandas as pd
@@ -60,51 +60,55 @@ class DatabaseManager:
     
     def init_database(self):
         """Initialise les tables de la base de données"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Table des prix historiques
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS stock_prices (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                symbol TEXT NOT NULL,
-                timestamp DATETIME NOT NULL,
-                price REAL NOT NULL,
-                change REAL,
-                volume INTEGER,
-                pe_ratio REAL,
-                dividend REAL,
-                dividend_yield REAL,
-                UNIQUE(symbol, timestamp)
-            )
-        ''')
-        
-        # Table des alertes
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS alerts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                symbol TEXT NOT NULL,
-                alert_type TEXT NOT NULL,
-                threshold REAL NOT NULL,
-                condition TEXT NOT NULL,
-                active BOOLEAN DEFAULT 1,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                last_triggered DATETIME
-            )
-        ''')
-        
-        # Table des favoris
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS favorites (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                symbol TEXT NOT NULL UNIQUE,
-                added_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
-        st.session_state.db_initialized = True
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Table des prix historiques
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS stock_prices (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    timestamp DATETIME NOT NULL,
+                    price REAL NOT NULL,
+                    change REAL,
+                    volume INTEGER,
+                    pe_ratio REAL,
+                    dividend REAL,
+                    dividend_yield REAL,
+                    source TEXT,
+                    UNIQUE(symbol, timestamp)
+                )
+            ''')
+            
+            # Table des alertes
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    alert_type TEXT NOT NULL,
+                    threshold REAL NOT NULL,
+                    condition TEXT NOT NULL,
+                    active BOOLEAN DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    last_triggered DATETIME
+                )
+            ''')
+            
+            # Table des favoris
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS favorites (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL UNIQUE,
+                    added_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            conn.commit()
+            conn.close()
+            st.session_state.db_initialized = True
+        except Exception as e:
+            st.error(f"Erreur initialisation BDD: {e}")
     
     def save_price(self, symbol, data):
         """Sauvegarde un prix dans la base de données"""
@@ -114,17 +118,18 @@ class DatabaseManager:
             
             cursor.execute('''
                 INSERT OR REPLACE INTO stock_prices 
-                (symbol, timestamp, price, change, volume, pe_ratio, dividend, dividend_yield)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (symbol, timestamp, price, change, volume, pe_ratio, dividend, dividend_yield, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 symbol,
                 datetime.now().isoformat(),
-                data['price'],
+                data.get('price', 0),
                 data.get('change', 0),
                 data.get('volume', 0),
                 data.get('pe_ratio', 0),
                 data.get('dividend', 0),
-                data.get('dividend_yield', 0)
+                data.get('dividend_yield', 0),
+                data.get('source', 'Simulation')
             ))
             
             conn.commit()
@@ -247,12 +252,16 @@ class APIManager:
                     previous_close = meta.get('previousClose', price)
                     change = ((price - previous_close) / previous_close) * 100 if previous_close > 0 else 0
                     
+                    # Yahoo ne fournit pas P/E et dividende directement
                     return {
                         'price': round(price, 2),
                         'change': round(change, 2),
                         'volume': meta.get('regularMarketVolume', 0),
                         'currency': meta.get('currency', 'EUR'),
-                        'source': 'Yahoo Finance'
+                        'source': 'Yahoo Finance',
+                        'pe_ratio': 0,  # Valeur par défaut
+                        'dividend': 0,
+                        'dividend_yield': 0
                     }
             return None
         except Exception as e:
@@ -281,11 +290,15 @@ class APIManager:
                 
                 if quote:
                     change_percent = quote.get('10. change percent', '0%').replace('%', '')
+                    # Alpha Vantage non plus ne fournit pas toutes les métriques
                     return {
                         'price': float(quote.get('05. price', 0)),
                         'change': float(change_percent),
                         'volume': int(quote.get('06. volume', 0)),
-                        'source': 'Alpha Vantage'
+                        'source': 'Alpha Vantage',
+                        'pe_ratio': 0,
+                        'dividend': 0,
+                        'dividend_yield': 0
                     }
             return None
         except Exception as e:
@@ -307,7 +320,7 @@ def generate_live_data(symbol, api_source="Simulation", api_key=""):
         if real_data:
             return real_data
     
-    # Sinon, données simulées
+    # Sinon, données simulées avec toutes les métriques
     base_prices = {
         'MC.PA': 519.60,
         'RMS.PA': 2450.00,
@@ -332,6 +345,42 @@ def generate_live_data(symbol, api_source="Simulation", api_key=""):
         'TOT.PA': 52000
     }
     
+    base_pe = {
+        'MC.PA': 23.76,
+        'RMS.PA': 48.50,
+        'KER.PA': 18.30,
+        'CDI.PA': 15.20,
+        'AI.PA': 22.10,
+        'OR.PA': 14.80,
+        'BNP.PA': 9.50,
+        'SAN.PA': 16.40,
+        'TOT.PA': 8.70
+    }
+    
+    base_dividend = {
+        'MC.PA': 13.00,
+        'RMS.PA': 15.00,
+        'KER.PA': 4.50,
+        'CDI.PA': 2.80,
+        'AI.PA': 3.20,
+        'OR.PA': 1.90,
+        'BNP.PA': 3.40,
+        'SAN.PA': 2.60,
+        'TOT.PA': 2.90
+    }
+    
+    base_yield = {
+        'MC.PA': 2.48,
+        'RMS.PA': 0.61,
+        'KER.PA': 1.40,
+        'CDI.PA': 4.27,
+        'AI.PA': 1.77,
+        'OR.PA': 2.00,
+        'BNP.PA': 5.45,
+        'SAN.PA': 2.90,
+        'TOT.PA': 4.98
+    }
+    
     base_price = base_prices.get(symbol, 100.00)
     base_volume = base_volumes.get(symbol, 20000)
     
@@ -342,8 +391,10 @@ def generate_live_data(symbol, api_source="Simulation", api_key=""):
     volume_change = np.random.uniform(-15, 15)
     new_volume = int(base_volume * (1 + volume_change/100))
     
-    pe_ratio = new_price / np.random.uniform(15, 25)
-    dividend = new_price * np.random.uniform(0.02, 0.04)
+    # Petite variation pour les autres métriques
+    pe_ratio = base_pe.get(symbol, 15.0) * (1 + np.random.uniform(-0.05, 0.05))
+    dividend = base_dividend.get(symbol, 2.0) * (1 + np.random.uniform(-0.03, 0.03))
+    dividend_yield = base_yield.get(symbol, 2.0) * (1 + np.random.uniform(-0.05, 0.05))
     
     return {
         'symbol': symbol,
@@ -352,7 +403,7 @@ def generate_live_data(symbol, api_source="Simulation", api_key=""):
         'volume': new_volume,
         'pe_ratio': round(pe_ratio, 2),
         'dividend': round(dividend, 2),
-        'dividend_yield': round((dividend / new_price) * 100, 2),
+        'dividend_yield': round(dividend_yield, 2),
         'timestamp': datetime.now().isoformat(),
         'source': 'Simulation'
     }
@@ -934,14 +985,14 @@ def create_dashboard_html(data, update_counter, comparison_mode=False):
                 if (!{json.dumps(comparison_mode)}) {{
                     updateMetricWithAnimation('price', newData.price.toFixed(2) + ' €');
                     updateMetricWithAnimation('volume', newData.volume.toLocaleString());
-                    updateMetricWithAnimation('pe', newData.pe_ratio.toFixed(2));
-                    updateMetricWithAnimation('dividend', newData.dividend.toFixed(2) + ' €');
+                    updateMetricWithAnimation('pe', (newData.pe_ratio || 0).toFixed(2));
+                    updateMetricWithAnimation('dividend', (newData.dividend || 0).toFixed(2) + ' €');
                     
                     const changeEl = document.getElementById('priceChange');
                     changeEl.textContent = (newData.change >= 0 ? '+' : '') + newData.change.toFixed(2) + '%';
                     changeEl.className = 'metric-change ' + (newData.change >= 0 ? 'positive' : 'negative');
                     
-                    document.getElementById('yield').textContent = newData.dividend_yield.toFixed(2) + '%';
+                    document.getElementById('yield').textContent = (newData.dividend_yield || 0).toFixed(2) + '%';
                 }}
                 
                 document.getElementById('lastUpdate').textContent = 
@@ -1395,7 +1446,9 @@ def main():
                 "Prix": f"{data['price']:.2f} €",
                 "Variation": f"{data['change']:+.2f}%",
                 "Volume": f"{data['volume']:,}",
-                "P/E": f"{data['pe_ratio']:.2f}",
+                "P/E": f"{data.get('pe_ratio', 0):.2f}",
+                "Dividende": f"{data.get('dividend', 0):.2f} €",
+                "Rendement": f"{data.get('dividend_yield', 0):.2f}%",
                 "Source": data.get('source', 'Simulation')
             })
         
@@ -1411,9 +1464,9 @@ def main():
                 with col2:
                     st.metric("Volume", f"{data['volume']:,}")
                 with col3:
-                    st.metric("P/E", f"{data['pe_ratio']:.2f}")
+                    st.metric("P/E", f"{data.get('pe_ratio', 0):.2f}")
                 with col4:
-                    st.metric("Dividende", f"{data['dividend']:.2f} €")
+                    st.metric("Dividende", f"{data.get('dividend', 0):.2f} €")
     
     else:
         # Mode simple
@@ -1444,16 +1497,22 @@ def main():
                 for alert in st.session_state.alerts[-5:]:
                     st.info(f"{alert['symbol']} - {alert['price']} € à {alert['time'][11:19]}")
         
-        # Métriques principales
+        # Métriques principales avec valeurs par défaut
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Cours", f"{data['price']:.2f} €", f"{data['change']:+.2f}%")
         with col2:
             st.metric("Volume", f"{data['volume']:,}")
         with col3:
-            st.metric("P/E", f"{data['pe_ratio']:.2f}")
+            pe_value = data.get('pe_ratio', 0)
+            st.metric("P/E", f"{pe_value:.2f}" if pe_value > 0 else "N/A")
         with col4:
-            st.metric("Dividende", f"{data['dividend']:.2f} €", f"{data['dividend_yield']:.2f}%")
+            div_value = data.get('dividend', 0)
+            yield_value = data.get('dividend_yield', 0)
+            if div_value > 0:
+                st.metric("Dividende", f"{div_value:.2f} €", f"{yield_value:.2f}%")
+            else:
+                st.metric("Dividende", "N/A")
         
         # Source des données
         st.caption(f"Source: {data.get('source', 'Simulation')}")
@@ -1467,9 +1526,9 @@ def main():
             'price': data['price'],
             'change': data['change'],
             'volume': data['volume'],
-            'pe_ratio': data['pe_ratio'],
-            'dividend': data['dividend'],
-            'dividend_yield': data['dividend_yield'],
+            'pe_ratio': data.get('pe_ratio', 0),
+            'dividend': data.get('dividend', 0),
+            'dividend_yield': data.get('dividend_yield', 0),
             'last_update': datetime.now().strftime('%H:%M:%S'),
             'market_open': market_open,
             'period': period,
