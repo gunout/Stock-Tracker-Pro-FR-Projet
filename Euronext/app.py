@@ -1,152 +1,280 @@
-# app.py - Version évolutive
+# app.py - Version avec dashboard intégré
 import streamlit as st
-from datetime import datetime, timedelta
+from datetime import datetime
 import pandas as pd
-import numpy as np 
+import numpy as np
 import plotly.graph_objects as go
+import json
 
-st.set_page_config(page_title="Analyse Financière", page_icon="📊", layout="wide")
+st.set_page_config(
+    page_title="Analyse Financière MC.PA",
+    page_icon="📊",
+    layout="wide"
+)
 
-# Imports conditionnels (avec fallback)
-try:
-    from api.client import FinancialAPIClient
-    API_DISPONIBLE = True
-except ImportError:
-    API_DISPONIBLE = False
-    st.warning("Module API non disponible, utilisation des données simulées")
+# Imports
+from api.client import FinancialAPIClient
+from api.rate_limiter import RateLimiter
+from components.metrics import display_stock_metrics
+from config.settings import AppConfig, DEFAULT_SYMBOLS
 
-try:
-    from components.charts import create_candlestick_chart, create_volume_chart
-    CHARTS_DISPONIBLE = True
-except ImportError:
-    CHARTS_DISPONIBLE = False
-
-try:
-    from utils.indicators import calculate_rsi, calculate_macd
-    INDICATORS_DISPONIBLE = True
-except ImportError:
-    INDICATORS_DISPONIBLE = False
-
-# Fonction de données simulées (toujours disponible)
-def get_mock_data(symbol, days=100):
-    """Génère des données simulées"""
-    dates = pd.date_range(end=datetime.now(), periods=days, freq='D')
-    base_price = 519.60 if symbol == "MC.PA" else 100.00
-    returns = pd.Series(np.random.randn(days) * 0.02)
-    price_series = base_price * (1 + returns.cumsum() / 10)
+# Fonction pour générer le dashboard HTML
+def create_dashboard_html(data):
+    """Crée le HTML du dashboard avec les données"""
     
-    return pd.DataFrame({
-        'Date': dates,
-        'Open': price_series * (1 + np.random.randn(days) * 0.005),
-        'High': price_series * (1 + abs(np.random.randn(days)) * 0.01),
-        'Low': price_series * (1 - abs(np.random.randn(days)) * 0.01),
-        'Close': price_series,
-        'Volume': np.random.randint(100000, 1000000, days)
-    })
+    # Convertir les données en JSON pour JavaScript
+    data_json = json.dumps(data)
+    
+    html = f"""
+    <!doctype html>
+    <html lang="fr">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <title>Dashboard Financier</title>
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }}
+            .dashboard {{ padding: 20px; }}
+            .metrics-container {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 30px; }}
+            .metric-card {{
+                background: white;
+                padding: 20px;
+                border-radius: 10px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                text-align: center;
+            }}
+            .metric-label {{ color: #666; font-size: 14px; margin-bottom: 5px; }}
+            .metric-value {{ font-size: 24px; font-weight: bold; color: #333; }}
+            .metric-change {{ font-size: 14px; margin-top: 5px; }}
+            .positive {{ color: #4CAF50; }}
+            .negative {{ color: #F44336; }}
+            .chart-container {{ 
+                background: white;
+                padding: 20px;
+                border-radius: 10px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                margin-top: 20px;
+            }}
+            .symbol-header {{ 
+                font-size: 28px; 
+                font-weight: bold; 
+                margin-bottom: 20px;
+                color: #333;
+                border-bottom: 2px solid #FF4B4B;
+                padding-bottom: 10px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="dashboard">
+            <div class="symbol-header">{data['symbol']} - Analyse en temps réel</div>
+            
+            <div class="metrics-container" id="metrics">
+                <div class="metric-card">
+                    <div class="metric-label">Cours</div>
+                    <div class="metric-value">{data['price']:.2f} €</div>
+                    <div class="metric-change {'positive' if data['change'] >= 0 else 'negative'}">
+                        {data['change']:+.2f}%
+                    </div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Volume</div>
+                    <div class="metric-value">{data['volume']:,}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">P/E</div>
+                    <div class="metric-value">{data.get('pe_ratio', 23.76):.2f}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Dividende</div>
+                    <div class="metric-value">{data.get('dividend', 13.00):.2f} €</div>
+                    <div class="metric-change positive">{data.get('dividend_yield', 2.48):.2f}%</div>
+                </div>
+            </div>
+
+            <div class="chart-container">
+                <canvas id="priceChart" style="width:100%; height:400px;"></canvas>
+            </div>
+        </div>
+
+        <!-- Chart.js pour les graphiques -->
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script>
+            // Données reçues de Streamlit
+            const stockData = {data_json};
+            
+            // Créer le graphique
+            const ctx = document.getElementById('priceChart').getContext('2d');
+            
+            // Générer des données historiques simulées
+            const dates = [];
+            const prices = [];
+            let currentPrice = stockData.price;
+            
+            for (let i = 30; i >= 0; i--) {{
+                const date = new Date();
+                date.setDate(date.getDate() - i);
+                dates.push(date.toLocaleDateString('fr-FR'));
+                
+                // Prix avec variation aléatoire
+                const change = (Math.random() - 0.5) * 2;
+                currentPrice = currentPrice * (1 + change/100);
+                prices.push(currentPrice);
+            }}
+            
+            new Chart(ctx, {{
+                type: 'line',
+                data: {{
+                    labels: dates,
+                    datasets: [{{
+                        label: 'Prix',
+                        data: prices,
+                        borderColor: '#FF4B4B',
+                        backgroundColor: 'rgba(255, 75, 75, 0.1)',
+                        tension: 0.1,
+                        fill: true
+                    }}]
+                }},
+                options: {{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {{
+                        legend: {{
+                            display: false
+                        }}
+                    }},
+                    scales: {{
+                        y: {{
+                            beginAtZero: false,
+                            grid: {{
+                                color: 'rgba(0,0,0,0.05)'
+                            }}
+                        }}
+                    }}
+                }}
+            }});
+        </script>
+
+        <!-- Scripts originaux du dashboard -->
+        <script type="module" src="/-/build/assets/index-B59N3yFD.js"></script>
+    </body>
+    </html>
+    """
+    return html
+
+def get_mock_data(symbol):
+    """Données simulées"""
+    mock_data = {
+        'MC.PA': {
+            'symbol': 'MC.PA',
+            'price': 519.60,
+            'change': -0.93,
+            'volume': 26164,
+            'pe_ratio': 23.76,
+            'dividend': 13.00,
+            'dividend_yield': 2.48,
+            'market_cap': 257.87e9
+        },
+        'RMS.PA': {
+            'symbol': 'RMS.PA',
+            'price': 2450.00,
+            'change': 0.85,
+            'volume': 15000,
+            'pe_ratio': 48.50,
+            'dividend': 15.00,
+            'dividend_yield': 0.61,
+            'market_cap': 255.84e9
+        },
+        'KER.PA': {
+            'symbol': 'KER.PA',
+            'price': 320.00,
+            'change': -1.20,
+            'volume': 50000,
+            'pe_ratio': 18.30,
+            'dividend': 4.50,
+            'dividend_yield': 1.40,
+            'market_cap': 40.00e9
+        }
+    }
+    return mock_data.get(symbol, mock_data['MC.PA'])
 
 def main():
-    st.title("📊 Analyse Financière")
+    st.title("📊 Dashboard Financier Intégré")
     
-    # Sidebar avec options progressives
+    # Sidebar
     with st.sidebar:
-        st.header("Configuration")
+        st.header("⚙️ Configuration")
         
-        # Option 1: Symboles (toujours disponible)
-        symbol = st.selectbox("Symbole", ["MC.PA", "RMS.PA", "KER.PA", "CDI.PA"])
-        
-        # Option 2: Période (toujours disponible)
-        period = st.selectbox("Période", ["1M", "3M", "6M", "1Y"], index=1)
-        days_map = {"1M": 30, "3M": 90, "6M": 180, "1Y": 365}
-        days = days_map[period]
-        
-        # Option 3: Type de graphique (évolutif)
-        chart_type = st.radio(
-            "Type de graphique",
-            ["Ligne", "Chandelier"] if CHARTS_DISPONIBLE else ["Ligne"]
+        # Mode d'affichage
+        view_mode = st.radio(
+            "Mode d'affichage",
+            ["Streamlit Native", "Dashboard HTML", "Split View"],
+            index=0
         )
         
-        # Option 4: Indicateurs (évolutif)
-        if INDICATORS_DISPONIBLE:
-            with st.expander("Indicateurs techniques"):
-                show_rsi = st.checkbox("RSI")
-                show_macd = st.checkbox("MACD")
-                show_bollinger = st.checkbox("Bollinger Bands")
+        symbol = st.selectbox(
+            "Symbole",
+            options=["MC.PA", "RMS.PA", "KER.PA", "CDI.PA", "AI.PA"],
+            index=0
+        )
         
-        # Bouton rafraîchir
+        period = st.selectbox(
+            "Période",
+            options=["1J", "1S", "1M", "3M", "1Y"],
+            index=2
+        )
+        
         refresh = st.button("🔄 Rafraîchir")
     
-    # Corps principal
-    col1, col2, col3 = st.columns(3)
+    # Récupérer les données
+    data = get_mock_data(symbol)
     
-    # Métriques en temps réel
-    if API_DISPONIBLE:
-        client = FinancialAPIClient()
-        current_data = client.get_stock_data(symbol)
-    else:
-        # Données simulées
-        mock_data = {
-            'MC.PA': {'price': 519.60, 'change': -0.93, 'volume': 26164},
-            'RMS.PA': {'price': 2450.00, 'change': 0.85, 'volume': 15000}
-        }
-        current_data = mock_data.get(symbol, {'price': 100.00, 'change': 0, 'volume': 0})
-    
-    with col1:
-        st.metric("Cours", f"{current_data.get('price', 0):.2f} €", 
-                 f"{current_data.get('change', 0):.2f}%")
-    with col2:
-        st.metric("Volume", f"{current_data.get('volume', 0):,}")
-    with col3:
-        st.metric("Variation", f"{current_data.get('change', 0):.2f}%")
-    
-    # Données historiques
-    data = get_mock_data(symbol, days)
-    
-    # Graphique principal
-    if chart_type == "Chandelier" and CHARTS_DISPONIBLE:
-        fig = create_candlestick_chart(data, symbol)
-    else:
-        # Graphique ligne simple
+    # Affichage selon le mode choisi
+    if view_mode == "Streamlit Native":
+        # Interface Streamlit classique
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Cours", f"{data['price']:.2f} €", f"{data['change']:.2f}%")
+        with col2:
+            st.metric("Volume", f"{data['volume']:,}")
+        with col3:
+            st.metric("P/E", f"{data['pe_ratio']:.2f}")
+        with col4:
+            st.metric("Dividende", f"{data['dividend']:.2f} €", f"{data['dividend_yield']:.2f}%")
+        
+        # Graphique simple
+        dates = pd.date_range(end=datetime.now(), periods=30, freq='D')
+        prices = [data['price'] * (1 + np.random.randn()*0.02) for _ in range(30)]
+        
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=data['Date'], y=data['Close'], mode='lines'))
-        fig.update_layout(title=f"{symbol} - {period}")
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Indicateurs techniques (si disponibles)
-    if INDICATORS_DISPONIBLE:
-        tabs = st.tabs(["Indicateurs", "Données"])
+        fig.add_trace(go.Scatter(x=dates, y=prices, mode='lines'))
+        fig.update_layout(height=500)
+        st.plotly_chart(fig, use_container_width=True)
         
-        with tabs[0]:
-            if show_rsi:
-                rsi = calculate_rsi(data['Close'])
-                fig_rsi = go.Figure()
-                fig_rsi.add_trace(go.Scatter(x=data['Date'], y=rsi))
-                fig_rsi.add_hline(y=70, line_dash="dash", line_color="red")
-                fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
-                fig_rsi.update_layout(title="RSI (14)", height=300)
-                st.plotly_chart(fig_rsi, use_container_width=True)
+    elif view_mode == "Dashboard HTML":
+        # Dashboard HTML intégré
+        st.components.v1.html(create_dashboard_html(data), height=800, scrolling=True)
+        
+    else:  # Split View
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("📈 Vue Streamlit")
+            st.metric("Cours", f"{data['price']:.2f} €", f"{data['change']:.2f}%")
+            st.metric("Volume", f"{data['volume']:,}")
+            st.metric("P/E", f"{data['pe_ratio']:.2f}")
             
-            if show_macd:
-                macd, signal = calculate_macd(data['Close'])
-                fig_macd = go.Figure()
-                fig_macd.add_trace(go.Scatter(x=data['Date'], y=macd, name='MACD'))
-                fig_macd.add_trace(go.Scatter(x=data['Date'], y=signal, name='Signal'))
-                fig_macd.update_layout(title="MACD", height=300)
-                st.plotly_chart(fig_macd, use_container_width=True)
+            # Petit graphique
+            dates = pd.date_range(end=datetime.now(), periods=30, freq='D')
+            prices = [data['price'] * (1 + np.random.randn()*0.02) for _ in range(30)]
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=dates, y=prices, mode='lines'))
+            fig.update_layout(height=300, margin=dict(l=0, r=0, t=0, b=0))
+            st.plotly_chart(fig, use_container_width=True)
         
-        with tabs[1]:
-            st.dataframe(data.tail(10))
-    
-    # Export des données
-    if st.button("📥 Exporter en CSV"):
-        csv = data.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            "Télécharger",
-            csv,
-            f"{symbol}_data.csv",
-            "text/csv"
-        )
+        with col2:
+            st.subheader("🎨 Dashboard HTML")
+            st.components.v1.html(create_dashboard_html(data), height=400, scrolling=True)
 
 if __name__ == "__main__":
     main()
-
