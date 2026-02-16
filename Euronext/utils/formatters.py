@@ -1,4 +1,4 @@
-# src/utils/formatters.py
+# utils/formatters.py
 from datetime import datetime, timedelta
 from typing import Any, Union, Optional, Dict, List
 import pandas as pd
@@ -116,7 +116,7 @@ class StockFormatter:
         
         if 'dividend_yield' in data:
             formatted['yield_display'] = DataFormatter.format_percentage(
-                data['dividend_yield'] * 100
+                data['dividend_yield']
             )
         
         return formatted
