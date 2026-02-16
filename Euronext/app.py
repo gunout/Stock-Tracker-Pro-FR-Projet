@@ -2,6 +2,7 @@
 import streamlit as st
 from datetime import datetime, timedelta
 import pandas as pd
+import numpy as np 
 import plotly.graph_objects as go
 
 st.set_page_config(page_title="Analyse Financière", page_icon="📊", layout="wide")
@@ -148,3 +149,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
